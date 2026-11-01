@@ -3,14 +3,19 @@
  * Restart the SC7730 through the SC2723 PMIC watchdog, the way the Samsung
  * vendor kernel does it (arch_reset() + sec-reboot.c + sec_debug.c):
  *
- *   - clear Samsung's upload magic (0x50003000); the vendor kernel arms it
- *     at boot and only clears it on a clean reboot, so a watchdog reset
- *     after a TWRP session would otherwise end in upload mode
- *   - INFORM2 = "no low-power charging", INFORM3 = reboot reason for sboot
- *   - PMIC POR_RST_MONITOR = Spreadtrum boot mode ("recovery" -> TWRP)
+ *   - clear Samsung's upload magic; the vendor kernel arms it at boot and
+ *     only clears it on a clean reboot
+ *   - INFORM2 = "no low-power charging", INFORM3 = reboot reason; sboot's
+ *     sprd_check_reboot_mode() takes (INFORM3 & 0xf) as the boot mode when
+ *     INFORM3 & ~0xf == 0x12345670 (4 = recovery)
+ *   - PMIC POR_RST_MONITOR = Spreadtrum boot mode, as the vendor does
+ *     (sboot ignores it)
  *   - start the PMIC watchdog with 50 ms and wait for it
  *
- * The SRAM is only touched when restarting, never at boot.
+ * The vendor header puts the magic at 0x50003000, which holds code on
+ * this board. Disassembling SBOOT (loaded at 0x9f600000) shows sboot
+ * reading the magic at 0xf80 and INFORM3 at 0xf90 in IRAM0 instead.
+ * The IRAM is only touched when restarting, never at boot.
  */
 
 #include <linux/delay.h>
@@ -24,7 +29,7 @@
 
 #include "adi.h"
 
-#define SEC_DEBUG_PHYS		0x50003000
+#define SEC_DEBUG_PHYS		0x00000f80	/* IRAM0, see above */
 #define SEC_UPLOAD_MAGIC	0x00
 #define SEC_INFORM2		0x0c
 #define SEC_INFORM3		0x10
