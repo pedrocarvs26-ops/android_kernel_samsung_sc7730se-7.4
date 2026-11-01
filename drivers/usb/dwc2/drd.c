@@ -27,10 +27,14 @@ static void dwc2_ovr_init(struct dwc2_hsotg *hsotg)
 	gotgctl = dwc2_readl(hsotg, GOTGCTL);
 	dwc2_ovr_gotgctl(gotgctl);
 	gotgctl &= ~(GOTGCTL_BVALOVAL | GOTGCTL_AVALOVAL | GOTGCTL_VBVALOVAL);
-	if (hsotg->role_sw_default_mode == USB_DR_MODE_HOST)
+	hsotg->role_sw_role = USB_ROLE_NONE;
+	if (hsotg->role_sw_default_mode == USB_DR_MODE_HOST) {
 		gotgctl |= GOTGCTL_AVALOVAL | GOTGCTL_VBVALOVAL;
-	else if (hsotg->role_sw_default_mode == USB_DR_MODE_PERIPHERAL)
+		hsotg->role_sw_role = USB_ROLE_HOST;
+	} else if (hsotg->role_sw_default_mode == USB_DR_MODE_PERIPHERAL) {
 		gotgctl |= GOTGCTL_BVALOVAL | GOTGCTL_VBVALOVAL;
+		hsotg->role_sw_role = USB_ROLE_DEVICE;
+	}
 	dwc2_writel(hsotg, gotgctl, GOTGCTL);
 
 	spin_unlock_irqrestore(&hsotg->lock, flags);
@@ -126,6 +130,7 @@ static int dwc2_drd_role_sw_set(struct usb_role_switch *sw, enum usb_role role)
 		else if (hsotg->role_sw_default_mode == USB_DR_MODE_PERIPHERAL)
 			role = USB_ROLE_DEVICE;
 	}
+	hsotg->role_sw_role = role;
 
 	if ((IS_ENABLED(CONFIG_USB_DWC2_PERIPHERAL) ||
 	     IS_ENABLED(CONFIG_USB_DWC2_DUAL_ROLE)) &&
@@ -170,6 +175,13 @@ static int dwc2_drd_role_sw_set(struct usb_role_switch *sw, enum usb_role role)
 	return 0;
 }
 
+static enum usb_role dwc2_drd_role_sw_get(struct usb_role_switch *sw)
+{
+	struct dwc2_hsotg *hsotg = usb_role_switch_get_drvdata(sw);
+
+	return hsotg->role_sw_role;
+}
+
 int dwc2_drd_init(struct dwc2_hsotg *hsotg)
 {
 	struct usb_role_switch_desc role_sw_desc = {0};
@@ -183,6 +195,7 @@ int dwc2_drd_init(struct dwc2_hsotg *hsotg)
 	role_sw_desc.driver_data = hsotg;
 	role_sw_desc.fwnode = dev_fwnode(hsotg->dev);
 	role_sw_desc.set = dwc2_drd_role_sw_set;
+	role_sw_desc.get = dwc2_drd_role_sw_get;
 	role_sw_desc.allow_userspace_control = true;
 
 	role_sw = usb_role_switch_register(hsotg->dev, &role_sw_desc);
@@ -220,7 +233,7 @@ void dwc2_drd_resume(struct dwc2_hsotg *hsotg)
 	enum usb_role role;
 
 	if (hsotg->role_sw) {
-		/* get last known role (as the get ops isn't implemented by this driver) */
+		/* last role applied, the registers may have lost it */
 		role = usb_role_switch_get_role(hsotg->role_sw);
 
 		if (role == USB_ROLE_NONE) {
