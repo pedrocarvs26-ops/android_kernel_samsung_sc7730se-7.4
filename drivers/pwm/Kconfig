@@ -702,6 +702,18 @@ config PWM_SPRD
 	  To compile this driver as a module, choose M here: the module
 	  will be called pwm-sprd.
 
+config PWM_SPRD_SC8830
+	tristate "Spreadtrum SC8830/SC7730 PWM support"
+	depends on ARCH_SPRD || COMPILE_TEST
+	depends on HAS_IOMEM && COMMON_CLK
+	help
+	  PWM driver for the always-on PWM block of the Spreadtrum
+	  SC8830 family (SC7730, SC8830), which drives the backlight of
+	  the Samsung Galaxy Tab E.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called pwm-sprd-sc8830.
+
 config PWM_STI
 	tristate "STiH4xx PWM support"
 	depends on ARCH_STI || COMPILE_TEST
