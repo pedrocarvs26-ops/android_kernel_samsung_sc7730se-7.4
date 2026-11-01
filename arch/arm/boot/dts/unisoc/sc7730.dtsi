@@ -20,12 +20,31 @@
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
+		/* boot ROM pen + PMU power domains, mach-sprd/platsmp.c */
+		enable-method = "sprd,sc7730-smp";
 
-		/* Secondary CPUs need the Spreadtrum holding-pen, not yet */
 		cpu0: cpu@f00 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0xf00>;
+		};
+
+		cpu1: cpu@f01 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0xf01>;
+		};
+
+		cpu2: cpu@f02 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0xf02>;
+		};
+
+		cpu3: cpu@f03 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0xf03>;
 		};
 	};
 
