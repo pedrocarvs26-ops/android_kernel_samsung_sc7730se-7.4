@@ -15,6 +15,7 @@
 #include <linux/usb/gadget.h>
 #include <linux/usb/otg.h>
 #include <linux/usb/phy.h>
+#include <linux/usb/role.h>
 #include "hw.h"
 
 /*
@@ -867,6 +868,8 @@ struct dwc2_hregs_backup {
  * @role_sw:		usb_role_switch handle
  * @role_sw_default_mode: default operation mode of controller while usb role
  *			is USB_ROLE_NONE
+ * @role_sw_role:	role last applied through the role switch, with
+ *			USB_ROLE_NONE already mapped to role_sw_default_mode
  * @hcd_enabled:	Host mode sub-driver initialization indicator.
  * @gadget_enabled:	Peripheral mode sub-driver initialization indicator.
  * @ll_hw_enabled:	Status of low-level hardware resources.
@@ -1065,6 +1068,7 @@ struct dwc2_hsotg {
 	enum usb_dr_mode dr_mode;
 	struct usb_role_switch *role_sw;
 	enum usb_dr_mode role_sw_default_mode;
+	enum usb_role role_sw_role;
 	unsigned int hcd_enabled:1;
 	unsigned int gadget_enabled:1;
 	unsigned int ll_hw_enabled:1;
