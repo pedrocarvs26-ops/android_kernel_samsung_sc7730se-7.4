@@ -36,6 +36,10 @@
 #include <linux/sched_clock.h>
 #include <linux/sprd-bootstripes.h>
 
+#ifdef CONFIG_ARM
+#include <asm/delay.h>
+#endif
+
 #define SC8830_CH(n)		((n) * 0x20)
 #define SC8830_LOAD		0x00
 #define SC8830_VALUE		0x04
@@ -191,6 +195,65 @@ static void __init sc8830_probe_arch_timer(void)
 		frq, hi1, lo1, hi2, lo2);
 }
 
+#ifdef CONFIG_ARM
+/*
+ * The CPU cycle counter (PMCCNTR) as delay timer. What matters most is
+ * get_cycles(): without a delay timer, ARM32 random_get_entropy() falls
+ * back to the 32 kHz clocksource, far too coarse for the jitter entropy
+ * collector, and the CRNG stays uninitialised for minutes on a system
+ * without a saved seed. Only valid while the CPU clock is fixed (no
+ * cpufreq on this SoC yet) and nothing else drives the PMU (no PMU node
+ * in the device tree).
+ */
+static unsigned long notrace sc8830_read_cycles(void)
+{
+	u32 val;
+
+	asm volatile("mrc p15, 0, %0, c9, c13, 0" : "=r" (val));
+	return val;
+}
+
+static struct delay_timer sc8830_cycle_timer = {
+	.read_current_timer = sc8830_read_cycles,
+};
+
+static void __init sc8830_cycle_counter_init(void)
+{
+	const u32 ticks = 656;	/* ~20 ms of the 32 kHz clock */
+	u32 pmcr, t0, c0, c1, loops = 0;
+	u64 freq;
+
+	/* E: enable, C: reset the cycle counter, D = 0: count every cycle */
+	asm volatile("mrc p15, 0, %0, c9, c12, 0" : "=r" (pmcr));
+	pmcr = (pmcr & ~BIT(3)) | BIT(2) | BIT(0);
+	asm volatile("mcr p15, 0, %0, c9, c12, 0" : : "r" (pmcr));
+	/* PMCNTENSET: cycle counter */
+	asm volatile("mcr p15, 0, %0, c9, c12, 1" : : "r" (BIT(31)));
+	isb();
+
+	/* measure between two edges of the clocksource */
+	t0 = sc8830_cs_read(NULL);
+	while (sc8830_cs_read(NULL) == t0 && ++loops < 20000000)
+		cpu_relax();
+	t0 = sc8830_cs_read(NULL);
+	c0 = sc8830_read_cycles();
+	while ((u32)(sc8830_cs_read(NULL) - t0) < ticks && ++loops < 20000000)
+		cpu_relax();
+	c1 = sc8830_read_cycles();
+
+	freq = div_u64((u64)(c1 - c0) * sc8830_rate, ticks);
+	if (loops >= 20000000 || freq < 100000000) {
+		pr_warn("sc8830-timer: cycle counter not usable (%llu Hz)\n", freq);
+		return;
+	}
+	pr_info("sc8830-timer: CPU cycle counter %llu Hz\n", freq);
+	sc8830_cycle_timer.freq = freq;
+	register_current_timer_delay(&sc8830_cycle_timer);
+}
+#else
+static inline void sc8830_cycle_counter_init(void) { }
+#endif
+
 static int __init sc8830_timer_init(struct device_node *np)
 {
 	int irq, ret, idx;
@@ -258,6 +321,7 @@ static int __init sc8830_timer_init(struct device_node *np)
 
 	pr_info("sc8830-timer: %u Hz, clockevent irq %d\n", sc8830_rate, irq);
 	sc8830_probe_arch_timer();
+	sc8830_cycle_counter_init();
 	return 0;
 }
 TIMER_OF_DECLARE(sc8830_timer, "sprd,sc8830-timer", sc8830_timer_init);
