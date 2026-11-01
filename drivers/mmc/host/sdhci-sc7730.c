@@ -24,8 +24,14 @@
 
 #define SC7730_CLK_SEL_MASK	0x3
 
+/* Data sampling delay lines, used by the vendor only in DDR mode */
+#define SC7730_WRITE_DELAY	0x80
+#define SC7730_READ_POS_DELAY	0x84
+#define SC7730_READ_NEG_DELAY	0x88
+
 struct sc7730_sdhci {
 	unsigned int base_clk;
+	u32 write_delay, read_pos_delay, read_neg_delay;
 };
 
 static unsigned int sc7730_sdhci_get_max_clock(struct sdhci_host *host)
@@ -35,12 +41,28 @@ static unsigned int sc7730_sdhci_get_max_clock(struct sdhci_host *host)
 	return priv->base_clk;
 }
 
+static void sc7730_sdhci_set_uhs_signaling(struct sdhci_host *host,
+					   unsigned int timing)
+{
+	struct sc7730_sdhci *priv = sdhci_pltfm_priv(sdhci_priv(host));
+
+	sdhci_set_uhs_signaling(host, timing);
+	if (timing != MMC_TIMING_MMC_DDR52 && timing != MMC_TIMING_UHS_DDR50)
+		return;
+	if (priv->write_delay)
+		sdhci_writel(host, priv->write_delay, SC7730_WRITE_DELAY);
+	if (priv->read_pos_delay)
+		sdhci_writel(host, priv->read_pos_delay, SC7730_READ_POS_DELAY);
+	if (priv->read_neg_delay)
+		sdhci_writel(host, priv->read_neg_delay, SC7730_READ_NEG_DELAY);
+}
+
 static const struct sdhci_ops sc7730_sdhci_ops = {
 	.set_clock		= sdhci_set_clock,
 	.get_max_clock		= sc7730_sdhci_get_max_clock,
 	.set_bus_width		= sdhci_set_bus_width,
 	.reset			= sdhci_reset,
-	.set_uhs_signaling	= sdhci_set_uhs_signaling,
+	.set_uhs_signaling	= sc7730_sdhci_set_uhs_signaling,
 };
 
 static const struct sdhci_pltfm_data sc7730_sdhci_pdata = {
@@ -50,7 +72,12 @@ static const struct sdhci_pltfm_data sc7730_sdhci_pdata = {
 		  SDHCI_QUIRK_DATA_TIMEOUT_USES_SDCLK |
 		  SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN |
 		  SDHCI_QUIRK_NO_HISPD_BIT,
-	.quirks2 = SDHCI_QUIRK2_PRESET_VALUE_BROKEN,
+	/*
+	 * caps1 claims SDR104, which makes sdhci offer HS200 to eMMC; the
+	 * vendor never uses it and tuning is untested here.
+	 */
+	.quirks2 = SDHCI_QUIRK2_PRESET_VALUE_BROKEN |
+		   SDHCI_QUIRK2_BROKEN_HS200,
 };
 
 static int sc7730_sdhci_probe(struct platform_device *pdev)
@@ -77,6 +104,12 @@ static int sc7730_sdhci_probe(struct platform_device *pdev)
 
 	sel = readl(clk_cfg) & SC7730_CLK_SEL_MASK;
 	priv->base_clk = rates[sel];
+
+	of_property_read_u32(dev->of_node, "sprd,write-delay", &priv->write_delay);
+	of_property_read_u32(dev->of_node, "sprd,read-pos-delay",
+			     &priv->read_pos_delay);
+	of_property_read_u32(dev->of_node, "sprd,read-neg-delay",
+			     &priv->read_neg_delay);
 	dev_info(dev, "base clock %u Hz (mux %u), caps %08x %08x\n",
 		 priv->base_clk, sel, sdhci_readl(host, SDHCI_CAPABILITIES),
 		 sdhci_readl(host, SDHCI_CAPABILITIES_1));

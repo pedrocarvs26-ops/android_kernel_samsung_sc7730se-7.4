@@ -85,8 +85,11 @@
 };
 
 /*
- * First eMMC bring-up: SDR high speed only. The vendor runs DDR52 at
- * 1.8 V I/O with extra delay-line settings, that comes later.
+ * DDR52 with the vendor's delay-line values. The eMMC I/O rail is a fixed
+ * 1.8 V (no vqmmc supply in the vendor tree), but the 1.8 V signalling bit
+ * of this SDHCI never sticks ("1.8V regulator output did not become
+ * stable"), so ask for DDR at the 3.3 V setting directly: same result
+ * without the failed switch, and no-1-8-v also keeps HS200 off.
  */
 &emmc {
 	bus-width = <8>;
@@ -95,6 +98,10 @@
 	no-sdio;
 	no-1-8-v;
 	cap-mmc-highspeed;
+	mmc-ddr-3_3v;
 	max-frequency = <52000000>;
+	sprd,write-delay = <0x08>;
+	sprd,read-pos-delay = <0x04>;
+	sprd,read-neg-delay = <0x04>;
 	status = "okay";
 };
