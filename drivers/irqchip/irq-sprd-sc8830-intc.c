@@ -13,6 +13,10 @@
  * the other way. INTC n covers SPI 32n..32n+31 with bit = SPI % 32; bits 0
  * and 1 of every block are not wired. The AON wake-up mux, which only
  * matters for deep sleep, is not handled.
+ *
+ * An optional fifth register region is the AP APB clock gate register:
+ * INTC0-3 are bits 19-22 there. They have to be on before the blocks take
+ * any write, and this runs before the timers that used to enable them.
  */
 
 #include <linux/bits.h>
@@ -30,6 +34,7 @@
 #define INTC_IRQ_EN		0x08
 #define INTC_IRQ_DIS		0x0c
 #define INTC_FIQ_DIS		0x2c
+#define AP_APB_EB_INTC0_3	GENMASK(22, 19)
 
 static void __iomem *intc_base[INTC_BLOCKS];
 
@@ -114,12 +119,19 @@ static int __init sc8830_intc_init(struct device_node *node,
 				   struct device_node *parent)
 {
 	struct irq_domain *parent_domain, *domain;
+	void __iomem *ap_apb;
 	int i;
 
 	parent_domain = parent ? irq_find_host(parent) : NULL;
 	if (!parent_domain) {
 		pr_err("%pOF: no parent interrupt controller\n", node);
 		return -ENXIO;
+	}
+
+	ap_apb = of_iomap(node, INTC_BLOCKS);
+	if (ap_apb) {
+		writel_relaxed(readl_relaxed(ap_apb) | AP_APB_EB_INTC0_3, ap_apb);
+		iounmap(ap_apb);
 	}
 
 	for (i = 0; i < INTC_BLOCKS; i++) {
