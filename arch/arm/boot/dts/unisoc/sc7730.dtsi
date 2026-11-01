@@ -15,7 +15,7 @@
 / {
 	#address-cells = <1>;
 	#size-cells = <1>;
-	interrupt-parent = <&gic>;
+	interrupt-parent = <&intc>;
 
 	cpus {
 		#address-cells = <1>;
@@ -46,8 +46,22 @@
 			compatible = "arm,cortex-a7-gic";
 			#interrupt-cells = <3>;
 			interrupt-controller;
+			interrupt-parent = <&gic>;
 			reg = <0x12001000 0x1000>,
 			      <0x12002000 0x2000>;
+		};
+
+		/*
+		 * Wake-up gates in front of the GIC: an idle CPU only wakes
+		 * for interrupts enabled here. All SPIs go through it.
+		 */
+		intc: interrupt-controller@71400000 {
+			compatible = "sprd,sc8830-intc";
+			#interrupt-cells = <3>;
+			interrupt-controller;
+			interrupt-parent = <&gic>;
+			reg = <0x71400000 0x1000>, <0x71500000 0x1000>,
+			      <0x71600000 0x1000>, <0x71700000 0x1000>;
 		};
 
 		timer@40050000 {
