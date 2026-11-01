@@ -42,11 +42,8 @@
 		 * sboot leaves a 4.35 V float, charging on, termination off.
 		 * The vendor kernel set 4.32 V; smb347 rewrites only what is
 		 * given here (volatile copies, reloaded from NVM at POR).
-		 * Input stays in sboot's 500 mA USB mode (CMD_B untouched).
 		 * No temperature properties: those would switch on the
 		 * chip's NTC monitor, which the vendor keeps off (0x07 bit 4).
-		 * No input current limits: the mainline SMB358 table differs
-		 * from the one in sboot and the vendor driver.
 		 */
 		charger: charger@6a {
 			compatible = "summit,smb358";
@@ -56,6 +53,13 @@
 			summit,enable-usb-charging;
 			summit,enable-charge-control = <SMB3XX_CHG_ENABLE_SW>;
 			summit,fast-voltage-threshold-microvolt = <2400000>;
+			/*
+			 * High-current input mode by the MUIC's charger type:
+			 * 1.8 A on a wall charger (vendor value), 1.5 A on a
+			 * charging host port, 500 mA on a plain one.
+			 */
+			extcon = <&muic>;
+			summit,mains-current-limit-microamp = <1800000>;
 			monitored-battery = <&battery>;
 		};
 	};
@@ -104,6 +108,28 @@
 		monitored-battery = <&battery>;
 		power-supplies = <&charger>;
 		sprd,calib-resistance-micro-ohms = <20200>;
+	};
+
+	/*
+	 * Bit-banged bus to the SM5504 MUIC, which tells USB host ports
+	 * (SDP/CDP) from wall chargers (DCP) for the charger's input limit.
+	 * The bootloader leaves it in automatic switching, the USB data
+	 * path does not depend on the driver.
+	 */
+	i2c-muic {
+		compatible = "i2c-gpio";
+		sda-gpios = <&gpio 150 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		scl-gpios = <&gpio 151 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		i2c-gpio,delay-us = <10>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		muic: extcon@14 {
+			compatible = "siliconmitus,sm5504-muic";
+			reg = <0x14>;
+			interrupt-parent = <&gpio>;
+			interrupts = <149 IRQ_TYPE_EDGE_FALLING>;
+		};
 	};
 
 	/* 5000 mAh, data from the vendor sec-fuelgauge/sec-battery nodes */
