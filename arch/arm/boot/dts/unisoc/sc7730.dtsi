@@ -239,6 +239,19 @@
 			#interrupt-cells = <2>;
 		};
 
+		/* I2C0, the camera sensors. Gate and reset: bit 8 in AP_APB. */
+		i2c0: i2c@70500000 {
+			compatible = "sprd,sc8830-i2c";
+			reg = <0x70500000 0x1000>, <0x71300000 0x8>;
+			reg-names = "i2c", "ap-apb";
+			sprd,ap-apb-bit = <8>;
+			clocks = <&ext_26m>;
+			clock-frequency = <100000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
 		/*
 		 * I2C1. Source clock 26 MHz (AP_CLK_I2C1_CFG mux 0, as the
 		 * vendor leaves it); gate and reset are bit 9 in AP_APB.
