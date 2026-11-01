@@ -48,7 +48,7 @@
 		 * No input current limits: the mainline SMB358 table differs
 		 * from the one in sboot and the vendor driver.
 		 */
-		charger@6a {
+		charger: charger@6a {
 			compatible = "summit,smb358";
 			reg = <0x6a>;
 			/* without it, "online" stays at its probe-time value */
@@ -95,13 +95,35 @@
 		post-power-on-delay-ms = <200>;
 	};
 
+	/*
+	 * SC2723 fuel gauge (mach-sprd/sc2723-fgu.c). Sense resistor: 20 mOhm
+	 * nominal, 20.2 mOhm on this board (vendor rsense_real = 202).
+	 */
+	fuel-gauge {
+		compatible = "sprd,sc2723-fgu-polled";
+		monitored-battery = <&battery>;
+		power-supplies = <&charger>;
+		sprd,calib-resistance-micro-ohms = <20200>;
+	};
+
+	/* 5000 mAh, data from the vendor sec-fuelgauge/sec-battery nodes */
 	battery: battery {
 		compatible = "simple-battery";
+		device-chemistry = "lithium-ion";
 		charge-full-design-microamp-hours = <5000000>;
 		constant-charge-voltage-max-microvolt = <4320000>;
 		constant-charge-current-max-microamp = <2000000>;
 		precharge-current-microamp = <450000>;
 		charge-term-current-microamp = <200000>;
+		factory-internal-resistance-micro-ohms = <220000>;
+		voltage-min-design-microvolt = <3400000>;
+		ocv-capacity-celsius = <20>;
+		ocv-capacity-table-0 = <4320000 100>, <4262000 95>, <4205000 90>,
+			<4152000 85>, <4101000 80>, <4055000 75>, <4006000 70>,
+			<3968000 65>, <3923000 60>, <3880000 55>, <3849000 50>,
+			<3824000 45>, <3806000 40>, <3790000 35>, <3778000 30>,
+			<3770000 25>, <3761000 20>, <3744000 15>, <3711000 10>,
+			<3690000 5>, <3400000 0>;
 	};
 };
 
