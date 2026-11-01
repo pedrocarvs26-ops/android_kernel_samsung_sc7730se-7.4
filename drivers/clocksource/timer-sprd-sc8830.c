@@ -171,30 +171,6 @@ static void __init sc8830_set_bits(struct device_node *np, const char *name,
 	iounmap(base);
 }
 
-/*
- * The vendor kernel never uses the ARM architected timer on this SoC.
- * Log what it looks like so we know whether it is usable later on.
- */
-static void __init sc8830_probe_arch_timer(void)
-{
-	u32 frq, lo1, hi1, lo2, hi2, t0, loops = 0;
-
-	/* CNTFRQ and the virtual counter are always accessible at PL1 */
-	asm volatile("mrc p15, 0, %0, c14, c0, 0" : "=r" (frq));
-	asm volatile("mrrc p15, 1, %0, %1, c14" : "=r" (lo1), "=r" (hi1));
-
-	/* wait ~1 ms on our own clocksource, bounded in case it is dead */
-	t0 = sc8830_cs_read(NULL);
-	while ((u32)(sc8830_cs_read(NULL) - t0) < 33 && ++loops < 20000000)
-		cpu_relax();
-
-	asm volatile("mrrc p15, 1, %0, %1, c14" : "=r" (lo2), "=r" (hi2));
-	pr_info("sc8830-timer: own counter %s (%u loops)\n",
-		loops < 20000000 ? "ticks" : "STUCK", loops);
-	pr_info("sc8830-timer: arch timer CNTFRQ=%u CNTVCT %08x%08x -> %08x%08x\n",
-		frq, hi1, lo1, hi2, lo2);
-}
-
 #ifdef CONFIG_ARM
 /*
  * The CPU cycle counter (PMCCNTR) as delay timer. What matters most is
@@ -221,7 +197,20 @@ static void __init sc8830_cycle_counter_init(void)
 {
 	const u32 ticks = 656;	/* ~20 ms of the 32 kHz clock */
 	u32 pmcr, t0, c0, c1, loops = 0;
+	struct device_node *np;
 	u64 freq;
+
+	/*
+	 * The architected timer is the better delay timer and get_cycles()
+	 * source, and PMCCNTR only counts on CPU0 (not synchronised across
+	 * cores either): with one in the device tree, stay out of its way.
+	 */
+	np = of_find_compatible_node(NULL, NULL, "arm,armv7-timer");
+	if (of_device_is_available(np)) {
+		of_node_put(np);
+		return;
+	}
+	of_node_put(np);
 
 	/* E: enable, C: reset the cycle counter, D = 0: count every cycle */
 	asm volatile("mrc p15, 0, %0, c9, c12, 0" : "=r" (pmcr));
@@ -320,7 +309,6 @@ static int __init sc8830_timer_init(struct device_node *np)
 					2, 0xf0000000);
 
 	pr_info("sc8830-timer: %u Hz, clockevent irq %d\n", sc8830_rate, irq);
-	sc8830_probe_arch_timer();
 	sc8830_cycle_counter_init();
 	return 0;
 }

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
+obj-y				+= sc7730.o
 obj-$(CONFIG_SPRD_BOOTSTRIPES)	+= bootstripes.o
 obj-$(CONFIG_SPRD_USB_BRINGUP)	+= usb-bringup.o
 obj-$(CONFIG_SPRD_ADI)		+= adi.o

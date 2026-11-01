@@ -39,6 +39,22 @@
 		#gpio-cells = <2>;
 	};
 
+	/*
+	 * Counts the CoreSight timestamp generator TS1 at 26 MHz, which
+	 * mach-sprd/sc7730.c starts (and sets CNTFRQ for). The kernel runs in
+	 * the Secure world with a random CNTVOFF: secure physical timer, and
+	 * no virtual counter for user space.
+	 */
+	timer {
+		compatible = "arm,armv7-timer";
+		interrupt-parent = <&gic>;
+		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>;
+		arm,cpu-registers-not-fw-configured;
+	};
+
 	ext_32k: clock-32k {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
@@ -78,7 +94,8 @@
 			interrupt-controller;
 			interrupt-parent = <&gic>;
 			reg = <0x71400000 0x1000>, <0x71500000 0x1000>,
-			      <0x71600000 0x1000>, <0x71700000 0x1000>;
+			      <0x71600000 0x1000>, <0x71700000 0x1000>,
+			      <0x71300000 0x4>;		/* AP APB clock gates */
 		};
 
 		timer@40050000 {
