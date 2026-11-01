@@ -193,6 +193,33 @@
 			status = "disabled";
 		};
 
+		/*
+		 * SDIO0, the microSD slot (vendor id 0). Gated by the
+		 * bootloader: AP_AHB EB bit 8, soft reset bit 11. Base clock
+		 * AP_CLK_SDIO0_CFG: mux bits 1:0, divider bits 10:8.
+		 */
+		sdio0: mmc@20300000 {
+			compatible = "sprd,sc7730-sdhci";
+			reg = <0x20300000 0x1000>, <0x71200048 0x4>,
+			      <0x20d00000 0x8>;
+			reg-names = "sdhci", "clk-cfg", "ap-ahb";
+			interrupts = <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>;
+			sprd,clk-parent-rates = <26000000 256000000 312000000 384000000>;
+			sprd,clk-sel = <3>;	/* 384 MHz like the vendor */
+			sprd,clk-has-div;
+			sprd,ahb-eb-bit = <8>;
+			sprd,ahb-rst-bit = <11>;
+			status = "disabled";
+		};
+
+		/* AP APB enable bits as gate clocks (mach-sprd/clk-gates.c) */
+		ap_apb_gates: clock-controller@71300000 {
+			compatible = "sprd,sc7730-gates";
+			reg = <0x71300000 0x4>;
+			clocks = <&ext_26m>;
+			#clock-cells = <1>;
+		};
+
 		/* CLK_AUX0 pad, 32 kHz (mach-sprd/clk-aux0.c) */
 		clk_aux0: clock-controller@402e0000 {
 			compatible = "sprd,sc7730-aux0-clk";
@@ -238,6 +265,30 @@
 			reg = <0x40250000 0x1000>, <0x402e0000 0x14>;
 			reg-names = "kpd", "aon-apb";
 			interrupts = <GIC_SPI 36 IRQ_TYPE_LEVEL_HIGH>;
+			status = "disabled";
+		};
+
+		/*
+		 * Always-on PWM, four channels. Gates are AON APB EB0 bits
+		 * 4..7, clock selects one register per channel at 0x402d0038.
+		 */
+		pwm: pwm@40260000 {
+			compatible = "sprd,sc8830-pwm";
+			reg = <0x40260000 0x80>, <0x402e0000 0x4>,
+			      <0x402d0038 0x10>;
+			reg-names = "pwm", "aon-apb", "clk-sel";
+			clocks = <&ext_26m>;
+			#pwm-cells = <2>;
+			status = "disabled";
+		};
+
+		/* Bluetooth on the gtelwifi; 26 MHz (vendor: 48 MHz) */
+		uart0: serial@70000000 {
+			compatible = "sprd,sc9836-uart";
+			reg = <0x70000000 0x100>;
+			interrupts = <GIC_SPI 2 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ext_26m>, <&ap_apb_gates 13>;
+			clock-names = "uart", "enable";
 			status = "disabled";
 		};
 
