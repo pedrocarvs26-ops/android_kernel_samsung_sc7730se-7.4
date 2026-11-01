@@ -10,6 +10,8 @@
 
 #include "sc7730.dtsi"
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/power/summit,smb347-charger.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 
 / {
@@ -23,12 +25,56 @@
 		enable-active-high;
 		startup-delay-us = <200000>;	/* vendor waits 200 ms */
 	};
+
+	/*
+	 * Bit-banged bus to the SMB358 charger, as in the vendor tree; sboot
+	 * drives the same pins and leaves them muxed as GPIO.
+	 */
+	i2c-chg {
+		compatible = "i2c-gpio";
+		sda-gpios = <&gpio 159 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		scl-gpios = <&gpio 160 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		i2c-gpio,delay-us = <10>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/*
+		 * sboot leaves a 4.35 V float, charging on, termination off.
+		 * The vendor kernel set 4.32 V; smb347 rewrites only what is
+		 * given here (volatile copies, reloaded from NVM at POR).
+		 * Input stays in sboot's 500 mA USB mode (CMD_B untouched).
+		 * No temperature properties: those would switch on the
+		 * chip's NTC monitor, which the vendor keeps off (0x07 bit 4).
+		 * No input current limits: the mainline SMB358 table differs
+		 * from the one in sboot and the vendor driver.
+		 */
+		charger@6a {
+			compatible = "summit,smb358";
+			reg = <0x6a>;
+			/* without it, "online" stays at its probe-time value */
+			interrupts-extended = <&gpio 161 IRQ_TYPE_EDGE_FALLING>;
+			summit,enable-usb-charging;
+			summit,enable-charge-control = <SMB3XX_CHG_ENABLE_SW>;
+			summit,fast-voltage-threshold-microvolt = <2400000>;
+			monitored-battery = <&battery>;
+		};
+	};
+
+	battery: battery {
+		compatible = "simple-battery";
+		charge-full-design-microamp-hours = <5000000>;
+		constant-charge-voltage-max-microvolt = <4320000>;
+		constant-charge-current-max-microamp = <2000000>;
+		precharge-current-microamp = <450000>;
+		charge-term-current-microamp = <200000>;
+	};
 };
 
 /*
  * Zinitix ZT7554 (vendor "zinitix,zt7554_ts"); pinmux for I2C1 and the
  * IRQ pad comes from the bootloader. GPIOs 81/83 only tell the vendor
- * driver which firmware image to flash.
+ * driver which firmware image to flash. The two capacitive keys next to
+ * Home are touch controller icons 0 and 1 (vendor: KEY_RECENT, KEY_BACK).
  */
 &i2c1 {
 	status = "okay";
@@ -41,6 +87,7 @@
 		vcca-supply = <&tsp_ldo>;
 		touchscreen-size-x = <800>;
 		touchscreen-size-y = <1280>;
+		linux,keycodes = <KEY_APPSELECT KEY_BACK>;
 	};
 };
 
