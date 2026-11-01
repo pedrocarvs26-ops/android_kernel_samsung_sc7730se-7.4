@@ -108,6 +108,17 @@
 		monitored-battery = <&battery>;
 		power-supplies = <&charger>;
 		sprd,calib-resistance-micro-ohms = <20200>;
+		/* battery thermistor, vendor sec-battery table (ADC -> 0.1 C) */
+		io-channels = <&pmic_adc 1>;
+		io-channel-names = "bat-temp";
+		sprd,bat-temp-table = <653 700>, <889 600>, <963 580>,
+			<1093 530>, <1177 500>, <1307 460>, <1334 450>,
+			<1549 400>, <1940 300>, <2392 200>, <2727 100>,
+			<2900 50>, <3040 0>, <3210 (-50)>, <3360 (-100)>,
+			<3537 (-200)>;
+		/* vendor limits: stop charging at -5 / 58 C, resume at 0 / 53 C */
+		sprd,charge-stop-celsius = <(-5) 58>;
+		sprd,charge-resume-celsius = <0 53>;
 	};
 
 	/*
