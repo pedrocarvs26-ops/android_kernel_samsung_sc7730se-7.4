@@ -117,6 +117,33 @@
 			status = "disabled";
 		};
 
+		/* Same register layout as the SC9860 "d-gpio" block */
+		gpio: gpio@40280000 {
+			compatible = "sprd,sc9860-gpio";
+			reg = <0x40280000 0x1000>;
+			interrupts = <GIC_SPI 35 IRQ_TYPE_LEVEL_HIGH>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		/*
+		 * I2C1. Source clock 26 MHz (AP_CLK_I2C1_CFG mux 0, as the
+		 * vendor leaves it); gate and reset are bit 9 in AP_APB.
+		 */
+		i2c1: i2c@70600000 {
+			compatible = "sprd,sc8830-i2c";
+			reg = <0x70600000 0x1000>, <0x71300000 0x8>;
+			reg-names = "i2c", "ap-apb";
+			sprd,ap-apb-bit = <9>;
+			clocks = <&ext_26m>;
+			clock-frequency = <100000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
 		uart1: serial@70100000 {
 			compatible = "sprd,sc9836-uart";
 			reg = <0x70100000 0x100>;
