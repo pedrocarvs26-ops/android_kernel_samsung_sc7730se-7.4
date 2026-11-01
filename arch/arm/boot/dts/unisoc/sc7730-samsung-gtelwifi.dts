@@ -69,13 +69,17 @@
 		};
 	};
 
-	/* Scan-out buffer left running by the bootloader (if lcd_base matches) */
+	/* Scan-out buffer left running by the bootloader (lcd_base=9ea44000) */
 	framebuffer@9ea44000 {
 		compatible = "simple-framebuffer";
 		reg = <0x9ea44000 (800 * 1280 * 4)>;
 		width = <800>;
 		height = <1280>;
 		stride = <(800 * 4)>;
-		format = "x8r8g8b8";	/* channel order still unverified */
+		format = "x8r8g8b8";	/* verified on the panel, Test 1b */
 	};
+};
+
+&usb {
+	status = "okay";
 };

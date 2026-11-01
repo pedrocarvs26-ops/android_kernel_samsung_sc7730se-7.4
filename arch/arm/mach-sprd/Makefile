@@ -1,2 +1,3 @@
 # SPDX-License-Identifier: GPL-2.0-only
 obj-$(CONFIG_SPRD_BOOTSTRIPES)	+= bootstripes.o
+obj-$(CONFIG_SPRD_USB_BRINGUP)	+= usb-bringup.o

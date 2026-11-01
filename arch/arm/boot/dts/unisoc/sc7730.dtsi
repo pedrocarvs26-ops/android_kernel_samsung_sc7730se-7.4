@@ -63,6 +63,22 @@
 			sprd,intmux-bit = <2>;
 		};
 
+		/*
+		 * Synopsys DWC OTG ("sprd,usb" in the vendor tree). PHY power,
+		 * clock and resets are still done by mach-sprd/usb-bringup.c.
+		 * No VBUS sensing wired to the core: the role switch override
+		 * forces the B-session valid, like the vendor driver does.
+		 */
+		usb: usb@20200000 {
+			compatible = "snps,dwc2";
+			reg = <0x20200000 0x40000>;
+			interrupts = <GIC_SPI 55 IRQ_TYPE_LEVEL_HIGH>;
+			dr_mode = "peripheral";
+			usb-role-switch;
+			role-switch-default-mode = "peripheral";
+			status = "disabled";
+		};
+
 		uart1: serial@70100000 {
 			compatible = "sprd,sc9836-uart";
 			reg = <0x70100000 0x100>;
