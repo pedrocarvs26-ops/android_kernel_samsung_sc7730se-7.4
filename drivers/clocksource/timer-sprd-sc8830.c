@@ -15,12 +15,8 @@
  * Channel 0 of the always-on (AON) timer is used as clockevent and
  * channel 1 of the same block as free running clocksource, exactly as
  * the vendor kernel does for CPU0. Both run from the 32.768 kHz clock.
- *
- * Bring-up quirk: on scx35 every interrupt is additionally gated by a
- * Spreadtrum "INTC" block and a wake-up mux in front of the GIC. The
- * vendor kernel opens both gates in its gic_arch_extn unmask hook. Until
- * a proper irqchip driver exists, this driver opens the gates for its
- * own interrupt if the optional "intc" and "intmux" regions are given.
+ * On SC7730 the architected timer takes over once the system counter
+ * runs; this one stays as a fallback.
  */
 
 #include <linux/bitops.h>
@@ -35,10 +31,6 @@
 #include <linux/of_irq.h>
 #include <linux/sched_clock.h>
 #include <linux/sprd-bootstripes.h>
-
-#ifdef CONFIG_ARM
-#include <asm/delay.h>
-#endif
 
 #define SC8830_CH(n)		((n) * 0x20)
 #define SC8830_LOAD		0x00
@@ -58,18 +50,9 @@
 
 /* AON APB clock gates (REG_AON_APB_APB_EB0) */
 #define AON_APB_EB0		0x0
-#define AON_EB0_INTC		BIT(15)
 #define AON_EB0_AP_TMR0		BIT(12)
 #define AON_EB0_AON_TMR		BIT(11)
 #define AON_EB0_AP_SYST		BIT(10)
-
-/* AP APB clock gates (REG_AP_APB_APB_EB) */
-#define AP_APB_EB		0x0
-#define AP_EB_INTC0_3		GENMASK(22, 19)
-
-/* INTC / wake-up mux registers */
-#define INTC_IRQ_EN		0x08
-#define INTC_IRQ_DIS		0x0c
 
 static void __iomem *evt_base;
 static void __iomem *src_base;
@@ -171,90 +154,16 @@ static void __init sc8830_set_bits(struct device_node *np, const char *name,
 	iounmap(base);
 }
 
-#ifdef CONFIG_ARM
-/*
- * The CPU cycle counter (PMCCNTR) as delay timer. What matters most is
- * get_cycles(): without a delay timer, ARM32 random_get_entropy() falls
- * back to the 32 kHz clocksource, far too coarse for the jitter entropy
- * collector, and the CRNG stays uninitialised for minutes on a system
- * without a saved seed. Only valid while the CPU clock is fixed (no
- * cpufreq on this SoC yet) and nothing else drives the PMU (no PMU node
- * in the device tree).
- */
-static unsigned long notrace sc8830_read_cycles(void)
-{
-	u32 val;
-
-	asm volatile("mrc p15, 0, %0, c9, c13, 0" : "=r" (val));
-	return val;
-}
-
-static struct delay_timer sc8830_cycle_timer = {
-	.read_current_timer = sc8830_read_cycles,
-};
-
-static void __init sc8830_cycle_counter_init(void)
-{
-	const u32 ticks = 656;	/* ~20 ms of the 32 kHz clock */
-	u32 pmcr, t0, c0, c1, loops = 0;
-	struct device_node *np;
-	u64 freq;
-
-	/*
-	 * The architected timer is the better delay timer and get_cycles()
-	 * source, and PMCCNTR only counts on CPU0 (not synchronised across
-	 * cores either): with one in the device tree, stay out of its way.
-	 */
-	np = of_find_compatible_node(NULL, NULL, "arm,armv7-timer");
-	if (of_device_is_available(np)) {
-		of_node_put(np);
-		return;
-	}
-	of_node_put(np);
-
-	/* E: enable, C: reset the cycle counter, D = 0: count every cycle */
-	asm volatile("mrc p15, 0, %0, c9, c12, 0" : "=r" (pmcr));
-	pmcr = (pmcr & ~BIT(3)) | BIT(2) | BIT(0);
-	asm volatile("mcr p15, 0, %0, c9, c12, 0" : : "r" (pmcr));
-	/* PMCNTENSET: cycle counter */
-	asm volatile("mcr p15, 0, %0, c9, c12, 1" : : "r" (BIT(31)));
-	isb();
-
-	/* measure between two edges of the clocksource */
-	t0 = sc8830_cs_read(NULL);
-	while (sc8830_cs_read(NULL) == t0 && ++loops < 20000000)
-		cpu_relax();
-	t0 = sc8830_cs_read(NULL);
-	c0 = sc8830_read_cycles();
-	while ((u32)(sc8830_cs_read(NULL) - t0) < ticks && ++loops < 20000000)
-		cpu_relax();
-	c1 = sc8830_read_cycles();
-
-	freq = div_u64((u64)(c1 - c0) * sc8830_rate, ticks);
-	if (loops >= 20000000 || freq < 100000000) {
-		pr_warn("sc8830-timer: cycle counter not usable (%llu Hz)\n", freq);
-		return;
-	}
-	pr_info("sc8830-timer: CPU cycle counter %llu Hz\n", freq);
-	sc8830_cycle_timer.freq = freq;
-	register_current_timer_delay(&sc8830_cycle_timer);
-}
-#else
-static inline void sc8830_cycle_counter_init(void) { }
-#endif
-
 static int __init sc8830_timer_init(struct device_node *np)
 {
 	int irq, ret, idx;
-	u32 hwirq;
 
 	if (of_property_read_u32(np, "clock-frequency", &sc8830_rate))
 		sc8830_rate = 32768;
 
-	/* Clock gates for AON timer, AP timer 0, sys counter and INTC mux */
+	/* Clock gates for AON timer, AP timer 0 and sys counter */
 	sc8830_set_bits(np, "aon-apb", AON_APB_EB0, AON_EB0_AON_TMR |
-			AON_EB0_AP_TMR0 | AON_EB0_AP_SYST | AON_EB0_INTC);
-	sc8830_set_bits(np, "ap-apb", AP_APB_EB, AP_EB_INTC0_3);
+			AON_EB0_AP_TMR0 | AON_EB0_AP_SYST);
 
 	idx = of_property_match_string(np, "reg-names", "timer");
 	src_base = of_iomap(np, idx < 0 ? 0 : idx);
@@ -287,15 +196,6 @@ static int __init sc8830_timer_init(struct device_node *np)
 		return -EINVAL;
 	}
 
-	/* Open the INTC + wake-up mux gates for our SPI (bring-up quirk) */
-	if (!of_property_read_u32_index(np, "interrupts", 1, &hwirq)) {
-		u32 mux_bit;
-
-		sc8830_set_bits(np, "intc", INTC_IRQ_EN, BIT(hwirq % 32));
-		if (!of_property_read_u32(np, "sprd,intmux-bit", &mux_bit))
-			sc8830_set_bits(np, "intmux", INTC_IRQ_EN, BIT(mux_bit));
-	}
-
 	ret = request_irq(irq, sc8830_timer_irq, IRQF_TIMER | IRQF_IRQPOLL,
 			  "sc8830-timer", &sc8830_clockevent);
 	if (ret) {
@@ -309,7 +209,6 @@ static int __init sc8830_timer_init(struct device_node *np)
 					2, 0xf0000000);
 
 	pr_info("sc8830-timer: %u Hz, clockevent irq %d\n", sc8830_rate, irq);
-	sc8830_cycle_counter_init();
 	return 0;
 }
 TIMER_OF_DECLARE(sc8830_timer, "sprd,sc8830-timer", sc8830_timer_init);
