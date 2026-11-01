@@ -217,6 +217,23 @@ config SPRD_CLK_AUX0
 	  the Broadcom WLAN chip on the Galaxy Tab E. Stop-gap until there
 	  is a clock driver for the SC7730.
 
+config SPRD_CLK_GATES
+	bool "SC7730 enable registers as gate clocks (bring-up glue)"
+	depends on ARCH_SPRD && COMMON_CLK
+	help
+	  The 32 enable bits of a gate register as clocks, for drivers that
+	  want an "enable" clock (sprd_serial on UART0 for Bluetooth).
+	  Stop-gap until there is a clock driver for the SC7730.
+
+config SPRD_SC2723_LDO
+	bool "SC2723 PMIC LDOs as regulators (bring-up glue)"
+	depends on ARCH_SPRD && REGULATOR
+	select SPRD_ADI
+	help
+	  LDOs of the SC2723 PMIC, one device tree node each, switched and
+	  set over the ADI bus: the microSD card supply, later the camera
+	  rails.
+
 config SPRD_SC2723_ADC
 	bool "SC2723 PMIC auxiliary ADC (bring-up glue)"
 	depends on ARCH_SPRD && IIO

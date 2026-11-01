@@ -12,6 +12,7 @@
  */
 
 #include <linux/bits.h>
+#include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -121,3 +122,46 @@ static int __init sprd_adi_init(void)
 	return 0;
 }
 early_initcall(sprd_adi_init);
+
+#ifdef CONFIG_DEBUG_FS
+/*
+ * debugfs sprd-adi/{address,value}: PMIC registers from user space for
+ * bring-up (audio, camera rails), under the same lock as the drivers.
+ * /dev/mem must not be used for the ADI: a read is a command sequence and
+ * would race the fuel gauge polling.
+ */
+static u32 adi_dbg_addr;
+
+static int adi_dbg_get(void *data, u64 *val)
+{
+	u32 v;
+	int ret;
+
+	if (adi_dbg_addr >= ADI_SLAVE_SIZE || adi_dbg_addr & 3)
+		return -EINVAL;
+	ret = sprd_adi_read(adi_dbg_addr, &v);
+	*val = v;
+	return ret;
+}
+
+static int adi_dbg_set(void *data, u64 val)
+{
+	if (adi_dbg_addr >= ADI_SLAVE_SIZE || adi_dbg_addr & 3)
+		return -EINVAL;
+	return sprd_adi_write(adi_dbg_addr, val);
+}
+DEFINE_DEBUGFS_ATTRIBUTE(adi_dbg_fops, adi_dbg_get, adi_dbg_set, "0x%08llx\n");
+
+static int __init sprd_adi_debugfs_init(void)
+{
+	struct dentry *dir;
+
+	if (!adi)
+		return 0;
+	dir = debugfs_create_dir("sprd-adi", NULL);
+	debugfs_create_x32("address", 0600, dir, &adi_dbg_addr);
+	debugfs_create_file_unsafe("value", 0600, dir, NULL, &adi_dbg_fops);
+	return 0;
+}
+late_initcall(sprd_adi_debugfs_init);
+#endif
