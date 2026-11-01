@@ -131,6 +131,7 @@ static const unsigned int sm5502_extcon_cable[] = {
 	EXTCON_USB_HOST,
 	EXTCON_CHG_USB_SDP,
 	EXTCON_CHG_USB_DCP,
+	EXTCON_CHG_USB_CDP,
 	EXTCON_NONE,
 };
 
@@ -181,6 +182,7 @@ enum sm5502_muic_acc_type {
 	SM5502_MUIC_ADC_GROUND_USB_OTG = 0x80,		/* |      100|00000| */
 	SM5502_MUIC_ADC_OPEN_USB = 0x5f,		/* |      010|11111| */
 	SM5502_MUIC_ADC_OPEN_TA = 0xdf,			/* |      110|11111| */
+	SM5502_MUIC_ADC_OPEN_USB_CDP = 0x9f,		/* |      100|11111| */
 	SM5502_MUIC_ADC_OPEN_USB_OTG = 0xff,		/* |      111|11111| */
 };
 
@@ -450,6 +452,10 @@ static unsigned int sm5502_muic_get_cable_type(struct sm5502_muic_info *info)
 		case SM5502_REG_DEV_TYPE1_DEDICATED_CHG_MASK:
 			cable_type = SM5502_MUIC_ADC_OPEN_TA;
 			break;
+		case SM5502_REG_DEV_TYPE1_USB_CHG_MASK:
+			/* charging downstream port: USB data, up to 1.5 A */
+			cable_type = SM5502_MUIC_ADC_OPEN_USB_CDP;
+			break;
 		default:
 			dev_dbg(info->dev,
 				"cannot identify the cable type: adc(0x%x)\n",
@@ -489,6 +495,11 @@ static int sm5502_muic_cable_handler(struct sm5502_muic_info *info,
 		con_sw	= DM_DP_SWITCH_USB;
 		vbus_sw	= VBUSIN_SWITCH_VBUSOUT_WITH_USB;
 		break;
+	case SM5502_MUIC_ADC_OPEN_USB_CDP:
+		id	= EXTCON_CHG_USB_CDP;
+		con_sw	= DM_DP_SWITCH_USB;
+		vbus_sw	= VBUSIN_SWITCH_VBUSOUT_WITH_USB;
+		break;
 	case SM5502_MUIC_ADC_OPEN_TA:
 		id	= EXTCON_CHG_USB_DCP;
 		con_sw	= DM_DP_SWITCH_OPEN;
@@ -516,6 +527,8 @@ static int sm5502_muic_cable_handler(struct sm5502_muic_info *info,
 	if (id == EXTCON_USB)
 		extcon_set_state_sync(info->edev, EXTCON_CHG_USB_SDP,
 					attached);
+	if (id == EXTCON_CHG_USB_CDP)
+		extcon_set_state_sync(info->edev, EXTCON_USB, attached);
 
 	return 0;
 }
