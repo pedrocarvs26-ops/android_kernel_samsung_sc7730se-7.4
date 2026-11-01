@@ -10,10 +10,14 @@
  * Until this SoC has a clock driver, the base clock is read back from the
  * AP clock mux the bootloader programmed ("clk-cfg", bits 1:0 select one of
  * "sprd,clk-parent-rates"), so the card is never clocked faster than the
- * divider math assumes. Gate, reset, pinmux and card power are left as the
- * bootloader set them up.
+ * divider math assumes. Pinmux and card power are left as the bootloader set
+ * them up, and so are gate and reset unless an "ap-ahb" region is given
+ * (EB at +0, RST at +4, bits in "sprd,ahb-eb-bit"/"sprd,ahb-rst-bit"): the
+ * bootloader only enables the eMMC host, the WLAN slot SDIO1 stays gated.
  */
 
+#include <linux/bits.h>
+#include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/mmc/host.h>
 #include <linux/module.h>
@@ -23,6 +27,9 @@
 #include "sdhci-pltfm.h"
 
 #define SC7730_CLK_SEL_MASK	0x3
+
+#define SC7730_AHB_EB		0x0
+#define SC7730_AHB_RST		0x4
 
 /* Data sampling delay lines, used by the vendor only in DDR mode */
 #define SC7730_WRITE_DELAY	0x80
@@ -80,6 +87,29 @@ static const struct sdhci_pltfm_data sc7730_sdhci_pdata = {
 		   SDHCI_QUIRK2_BROKEN_HS200,
 };
 
+static void sc7730_sdhci_ahb_init(struct platform_device *pdev)
+{
+	struct device_node *np = pdev->dev.of_node;
+	struct resource *res;
+	void __iomem *ahb;
+	u32 eb, rst;
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ap-ahb");
+	if (!res || of_property_read_u32(np, "sprd,ahb-eb-bit", &eb) ||
+	    of_property_read_u32(np, "sprd,ahb-rst-bit", &rst))
+		return;
+	/* shared with other blocks, so no request_mem_region */
+	ahb = devm_ioremap(&pdev->dev, res->start, resource_size(res));
+	if (!ahb)
+		return;
+	/* vendor sequence: gate on, wait, then a reset pulse */
+	writel(readl(ahb + SC7730_AHB_EB) | BIT(eb), ahb + SC7730_AHB_EB);
+	usleep_range(500, 1000);
+	writel(readl(ahb + SC7730_AHB_RST) | BIT(rst), ahb + SC7730_AHB_RST);
+	usleep_range(200, 400);
+	writel(readl(ahb + SC7730_AHB_RST) & ~BIT(rst), ahb + SC7730_AHB_RST);
+}
+
 static int sc7730_sdhci_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -93,6 +123,9 @@ static int sc7730_sdhci_probe(struct platform_device *pdev)
 	if (IS_ERR(host))
 		return PTR_ERR(host);
 	priv = sdhci_pltfm_priv(sdhci_priv(host));
+
+	/* before the first register access, a gated host hangs the bus */
+	sc7730_sdhci_ahb_init(pdev);
 
 	clk_cfg = devm_platform_ioremap_resource_byname(pdev, "clk-cfg");
 	if (IS_ERR(clk_cfg))

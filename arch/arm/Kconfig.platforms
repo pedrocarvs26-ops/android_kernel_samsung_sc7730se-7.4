@@ -209,6 +209,14 @@ config SPRD_PMIC_EIC
 	  gpio-keys-polled, until the mainline sc27xx drivers support
 	  the SC2723.
 
+config SPRD_CLK_AUX0
+	bool "SC7730 CLK_AUX0 32 kHz output (bring-up glue)"
+	depends on ARCH_SPRD && COMMON_CLK
+	help
+	  Gate clock for the CLK_AUX0 pad, the 32 kHz low power clock of
+	  the Broadcom WLAN chip on the Galaxy Tab E. Stop-gap until there
+	  is a clock driver for the SC7730.
+
 config SPRD_ADI
 	bool
 
