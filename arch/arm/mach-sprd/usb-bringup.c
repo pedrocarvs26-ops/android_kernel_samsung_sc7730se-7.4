@@ -26,18 +26,11 @@
 #include <linux/printk.h>
 #include <linux/sprintf.h>
 
-#define ADI_PHYS		0x40030000
-#define ADI_RD_CMD		0x24
-#define ADI_RD_DATA		0x28
-#define ADI_RD_BUSY		BIT(31)
-#define ADI_FIFO_STS		0x2c
-#define ADI_FIFO_EMPTY		BIT(10)
+#include "adi.h"
 
-/* SC2723 global registers: ADI slave window (0x40038000) + 0x800 */
-#define ANA_GLB_PHYS		0x40038800
-#define ANA_LDO_PD_CTRL		0x14
+#define ANA_LDO_PD_CTRL		SC2723_GLB(0x14)
 #define ANA_LDO_USB_PD		BIT(8)
-#define ANA_LDO_V_CTRL9		0x3c	/* bits 7:0 LDO_USB_V */
+#define ANA_LDO_V_CTRL9		SC2723_GLB(0x3c)	/* bits 7:0 LDO_USB_V */
 
 #define AON_APB_PHYS		0x402e0000
 #define AON_APB_EB0		0x00
@@ -65,38 +58,6 @@
 /* "tune_value" of the vendor usb@f5116000 node for gtelwifi */
 #define GTELWIFI_PHY_TUNE	0x44076e33
 
-static void __iomem *adi, *ana;
-
-static int __init adi_read(u32 off, u32 *val)
-{
-	int i;
-
-	writel(ANA_GLB_PHYS + off, adi + ADI_RD_CMD);
-	for (i = 0; i < 2000; i++) {
-		u32 v = readl(adi + ADI_RD_DATA);
-
-		if (!(v & ADI_RD_BUSY)) {
-			*val = v & 0xffff;
-			return 0;
-		}
-		udelay(1);
-	}
-	return -ETIMEDOUT;
-}
-
-static int __init adi_write(u32 off, u32 val)
-{
-	int i;
-
-	writel(val, ana + off);
-	for (i = 0; i < 1000; i++) {
-		if (readl(adi + ADI_FIFO_STS) & ADI_FIFO_EMPTY)
-			return 0;
-		udelay(1);
-	}
-	return -ETIMEDOUT;
-}
-
 static void __init rmw(void __iomem *reg, u32 clr, u32 set)
 {
 	writel((readl(reg) & ~clr) | set, reg);
@@ -119,13 +80,11 @@ static int __init sprd_usb_bringup(void)
 	if (!ret)
 		return 0;
 
-	adi = ioremap(ADI_PHYS, 0x100);
-	ana = ioremap(ANA_GLB_PHYS, 0x100);
 	aon = ioremap(AON_APB_PHYS, 0x100);
 	ahb = ioremap(AP_AHB_PHYS, 0x100);
 	apb = ioremap(AP_APB_PHYS + AP_APB_USB_PHY_TUNE, 0x10);
 	usb = ioremap(USB_PHYS, 0x200);
-	if (!adi || !ana || !aon || !ahb || !apb || !usb) {
+	if (!aon || !ahb || !apb || !usb) {
 		pr_err("sprd-usb: ioremap failed\n");
 		goto out;
 	}
@@ -135,12 +94,12 @@ static int __init sprd_usb_bringup(void)
 		readl(ahb + AP_AHB_EB), readl(apb + 8), readl(apb));
 
 	/* 1. LDO_USB */
-	ret = adi_read(ANA_LDO_PD_CTRL, &pd);
-	adi_read(ANA_LDO_V_CTRL9, &vusb);
+	ret = sprd_adi_read(ANA_LDO_PD_CTRL, &pd);
+	sprd_adi_read(ANA_LDO_V_CTRL9, &vusb);
 	if (!ret && (pd & ANA_LDO_USB_PD))
-		ret = adi_write(ANA_LDO_PD_CTRL, pd & ~ANA_LDO_USB_PD);
+		ret = sprd_adi_write(ANA_LDO_PD_CTRL, pd & ~ANA_LDO_USB_PD);
 	if (!ret)
-		ret = adi_read(ANA_LDO_PD_CTRL, &pd_new);
+		ret = sprd_adi_read(ANA_LDO_PD_CTRL, &pd_new);
 	pr_info("sprd-usb: LDO_PD_CTRL %04x -> %04x (%d), LDO_V_CTRL9 %04x\n",
 		pd, pd_new, ret, vusb);
 	mdelay(10);
@@ -185,10 +144,6 @@ out:
 		iounmap(ahb);
 	if (aon)
 		iounmap(aon);
-	if (ana)
-		iounmap(ana);
-	if (adi)
-		iounmap(adi);
 	return 0;
 }
 subsys_initcall(sprd_usb_bringup);
