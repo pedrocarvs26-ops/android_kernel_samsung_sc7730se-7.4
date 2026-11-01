@@ -311,7 +311,11 @@ static void sc2723_fgu_update(struct sc2723_fgu *fgu)
 	 * from the battery until the charger restarts, keep 100 % meanwhile.
 	 */
 	supplied = power_supply_am_i_supplied(fgu->psy) > 0;
-	full = supplied && sc2723_fgu_charger_full(fgu);
+	/*
+	 * smb347 also reads Full when it terminated once and charging is
+	 * now off, which is the case while we inhibit it for the temperature.
+	 */
+	full = supplied && !fgu->inhibited && sc2723_fgu_charger_full(fgu);
 	if (full || ocv >= fgu->info->constant_charge_voltage_max_uv)
 		soc = 100;
 	else if (uv < fgu->info->voltage_min_design_uv)
