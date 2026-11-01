@@ -153,6 +153,7 @@
  * @usb_online: is USB input connected
  * @irq_unsupported: is interrupt unsupported by SMB hardware
  * @usb_vbus_enabled: is USB VBUS powered by SMB charger
+ * @inhibit_charge: charging disabled through charge_behaviour
  * @max_charge_current: maximum current (in uA) the battery can be charged
  * @max_charge_voltage: maximum voltage (in uV) the battery can be charged
  * @pre_charge_current: current (in uA) to use in pre-charging phase
@@ -213,6 +214,7 @@ struct smb347_charger {
 	bool			usb_online;
 	bool			irq_unsupported;
 	bool			usb_vbus_enabled;
+	bool			inhibit_charge;
 
 	unsigned int		max_charge_current;
 	unsigned int		max_charge_voltage;
@@ -387,6 +389,10 @@ static int smb347_charging_set(struct smb347_charger *smb, bool enable)
 		dev_dbg(smb->dev, "charging enable/disable in SW disabled\n");
 		return 0;
 	}
+
+	/* charge_behaviour inhibit-charge: off even with the input online */
+	if (smb->inhibit_charge)
+		enable = false;
 
 	if (enable && smb->usb_vbus_enabled) {
 		dev_dbg(smb->dev, "charging not enabled because USB is in host mode\n");
@@ -1246,6 +1252,12 @@ static int smb347_get_property_locked(struct power_supply *psy,
 		val->intval = ret;
 		break;
 
+	case POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR:
+		val->intval = smb->inhibit_charge ?
+			      POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE :
+			      POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO;
+		break;
+
 	default:
 		return -EINVAL;
 	}
@@ -1272,12 +1284,47 @@ static int smb347_get_property(struct power_supply *psy,
 	return ret;
 }
 
+static int smb347_set_property(struct power_supply *psy,
+			       enum power_supply_property prop,
+			       const union power_supply_propval *val)
+{
+	struct smb347_charger *smb = power_supply_get_drvdata(psy);
+	struct i2c_client *client = to_i2c_client(smb->dev);
+	int ret;
+
+	if (prop != POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR)
+		return -EINVAL;
+	if (val->intval != POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO &&
+	    val->intval != POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE)
+		return -EINVAL;
+
+	if (!smb->irq_unsupported)
+		disable_irq(client->irq);
+
+	smb->inhibit_charge =
+		val->intval == POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE;
+	ret = smb347_start_stop_charging(smb);
+
+	if (!smb->irq_unsupported)
+		enable_irq(client->irq);
+
+	power_supply_changed(psy);
+	return ret;
+}
+
+static int smb347_property_is_writeable(struct power_supply *psy,
+					enum power_supply_property prop)
+{
+	return prop == POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR;
+}
+
 static enum power_supply_property smb347_properties[] = {
 	POWER_SUPPLY_PROP_STATUS,
 	POWER_SUPPLY_PROP_CHARGE_TYPE,
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT,
 	POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE,
+	POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR,
 };
 
 static bool smb347_volatile_reg(struct device *dev, unsigned int reg)
@@ -1597,6 +1644,10 @@ static const struct power_supply_desc smb347_mains_desc = {
 	.name		= "smb347-mains",
 	.type		= POWER_SUPPLY_TYPE_MAINS,
 	.get_property	= smb347_get_property,
+	.set_property	= smb347_set_property,
+	.property_is_writeable = smb347_property_is_writeable,
+	.charge_behaviours = BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO) |
+			     BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE),
 	.properties	= smb347_properties,
 	.num_properties	= ARRAY_SIZE(smb347_properties),
 };
@@ -1605,6 +1656,10 @@ static const struct power_supply_desc smb347_usb_desc = {
 	.name		= "smb347-usb",
 	.type		= POWER_SUPPLY_TYPE_USB,
 	.get_property	= smb347_get_property,
+	.set_property	= smb347_set_property,
+	.property_is_writeable = smb347_property_is_writeable,
+	.charge_behaviours = BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO) |
+			     BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE),
 	.properties	= smb347_properties,
 	.num_properties	= ARRAY_SIZE(smb347_properties),
 };
