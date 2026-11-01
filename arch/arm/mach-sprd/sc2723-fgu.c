@@ -8,7 +8,10 @@
  * integrates CURT - 8192 at 2 Hz. The ADC scale comes from two calibration
  * points (4.2 V and 3.6 V) in the PMIC's A-die eFuse. State of charge is
  * coulomb counting from an OCV estimate (V - I * R_int) at probe, with the
- * vendor's re-anchoring at the top and bottom of the OCV table.
+ * vendor's re-anchoring at the top and bottom of the OCV table and when the
+ * charger reports the battery full. Like the vendor, the capacity is kept
+ * in the FGU's always-on USER_AREA, so a reboot continues from it instead
+ * of a fresh estimate under load.
  *
  * Register layout, eFuse decoding and formulas from the vendor 3.10 driver
  * (drivers/battery/sprd_2713_fgu.c, drivers/misc/sprd_otp/). Mainline
@@ -17,6 +20,7 @@
  * bring-up glue on top of the ADI helpers until they do.
  */
 
+#include <linux/bitfield.h>
 #include <linux/bitops.h>
 #include <linux/delay.h>
 #include <linux/math64.h>
@@ -47,10 +51,17 @@
 #define FGU_CURT_VAL		FGU(0x2c)
 #define FGU_CLBCNT_VALH		FGU(0x68)
 #define FGU_CLBCNT_VALL		FGU(0x6c)
+#define FGU_USER_AREA_SET	FGU(0xa0)
+#define FGU_USER_AREA_CLEAR	FGU(0xa4)
 #define FGU_USER_AREA		FGU(0xa8)
+#define USER_AREA_SOC		GENMASK(11, 0)
+#define USER_AREA_TYPE		GENMASK(15, 12)
+#define USER_AREA_TYPE_NORMAL	0x5	/* 0xf after a battery disconnect */
 
 #define FGU_CURT_ZERO		8192
 #define FGU_POLL_MS		30000
+/* a saved capacity this far from the OCV estimate is stale */
+#define FGU_SAVED_MAX_DIFF	25
 
 /* without eFuse data (vendor defaults): ADC counts at 4.2 V and 3.6 V */
 #define FGU_DEF_A42		2752
@@ -188,11 +199,30 @@ static void sc2723_fgu_anchor(struct sc2723_fgu *fgu, int soc)
 	fgu->cc0 = cc;
 }
 
+static void sc2723_fgu_save(int soc)
+{
+	u32 val = FIELD_PREP(USER_AREA_TYPE, USER_AREA_TYPE_NORMAL) |
+		  FIELD_PREP(USER_AREA_SOC, soc);
+
+	/* set/clear pair like the vendor; the status register reads back */
+	sprd_adi_write(FGU_USER_AREA_CLEAR, ~val & (USER_AREA_TYPE | USER_AREA_SOC));
+	sprd_adi_write(FGU_USER_AREA_SET, val);
+}
+
+static bool sc2723_fgu_charger_full(struct sc2723_fgu *fgu)
+{
+	union power_supply_propval val;
+
+	return !power_supply_get_property_from_supplier(fgu->psy,
+				POWER_SUPPLY_PROP_STATUS, &val) &&
+	       val.intval == POWER_SUPPLY_STATUS_FULL;
+}
+
 static void sc2723_fgu_update(struct sc2723_fgu *fgu)
 {
 	int volt = fgu_read(FGU_VOLT_VAL), curt = fgu_read(FGU_CURT_VAL);
 	int uv, ua, ocv, soc, status, full_uah;
-	bool supplied;
+	bool supplied, full;
 	s32 cc, delta;
 
 	if (volt < 0 || curt < 0 || sc2723_fgu_clbcnt(&cc))
@@ -206,8 +236,14 @@ static void sc2723_fgu_update(struct sc2723_fgu *fgu)
 	delta = sign_extend32(cc - fgu->cc0, 29);
 	soc = fgu->soc0 + div_s64(fgu_cc_to_uah(fgu, delta) * 100, full_uah);
 
-	/* re-anchor like the vendor at the ends of the OCV table */
-	if (ocv >= fgu->info->constant_charge_voltage_max_uv)
+	/*
+	 * Re-anchor like the vendor at the ends of the OCV table and when
+	 * the charger has terminated. After termination the tablet runs
+	 * from the battery until the charger restarts, keep 100 % meanwhile.
+	 */
+	supplied = power_supply_am_i_supplied(fgu->psy) > 0;
+	full = supplied && sc2723_fgu_charger_full(fgu);
+	if (full || ocv >= fgu->info->constant_charge_voltage_max_uv)
 		soc = 100;
 	else if (uv < fgu->info->voltage_min_design_uv)
 		soc = 0;
@@ -219,8 +255,9 @@ static void sc2723_fgu_update(struct sc2723_fgu *fgu)
 	 * By the current: in its 500 mA USB mode the charger can supply less
 	 * than the tablet draws, then the battery discharges while plugged in.
 	 */
-	supplied = power_supply_am_i_supplied(fgu->psy) > 0;
-	if (ua > 20000)
+	if (full)
+		status = POWER_SUPPLY_STATUS_FULL;
+	else if (ua > 20000)
 		status = POWER_SUPPLY_STATUS_CHARGING;
 	else if (!supplied || ua < -20000)
 		status = POWER_SUPPLY_STATUS_DISCHARGING;
@@ -229,6 +266,8 @@ static void sc2723_fgu_update(struct sc2723_fgu *fgu)
 	else
 		status = POWER_SUPPLY_STATUS_NOT_CHARGING;
 
+	if (soc != fgu->soc)
+		sc2723_fgu_save(soc);
 	if (soc != fgu->soc || status != fgu->status) {
 		fgu->soc = soc;
 		fgu->status = status;
@@ -242,7 +281,8 @@ static void sc2723_fgu_work(struct work_struct *work)
 					      work.work);
 
 	sc2723_fgu_update(fgu);
-	schedule_delayed_work(&fgu->work, msecs_to_jiffies(FGU_POLL_MS));
+	queue_delayed_work(system_dfl_wq, &fgu->work,
+			   msecs_to_jiffies(FGU_POLL_MS));
 }
 
 static int sc2723_fgu_get_property(struct power_supply *psy,
@@ -318,7 +358,8 @@ static void sc2723_fgu_external_power_changed(struct power_supply *psy)
 	struct sc2723_fgu *fgu = power_supply_get_drvdata(psy);
 
 	if (READ_ONCE(fgu->ready))
-		mod_delayed_work(system_wq, &fgu->work, msecs_to_jiffies(1000));
+		mod_delayed_work(system_dfl_wq, &fgu->work,
+				 msecs_to_jiffies(1000));
 }
 
 static const enum power_supply_property sc2723_fgu_props[] = {
@@ -357,7 +398,7 @@ static int sc2723_fgu_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct power_supply_config cfg = {};
 	struct sc2723_fgu *fgu;
-	int volt, curt, uv, ua, ocv, ret;
+	int volt, curt, uv, ua, ocv, soc, saved, ret;
 	u32 r_real = 20000;
 
 	fgu = devm_kzalloc(dev, sizeof(*fgu), GFP_KERNEL);
@@ -395,29 +436,38 @@ static int sc2723_fgu_probe(struct platform_device *pdev)
 	fgu->rint_mohm = fgu->info->factory_internal_resistance_uohm > 0 ?
 			 fgu->info->factory_internal_resistance_uohm / 1000 : 0;
 
-	/* start from the OCV, V - I * R_int */
+	/*
+	 * Start from the saved capacity, or from the OCV (V - I * R_int)
+	 * when there is none or it is stale, e.g. after charging while off.
+	 */
 	volt = fgu_read(FGU_VOLT_VAL);
 	curt = fgu_read(FGU_CURT_VAL);
-	if (volt < 0 || curt < 0)
+	saved = fgu_read(FGU_USER_AREA);
+	if (volt < 0 || curt < 0 || saved < 0)
 		return dev_err_probe(dev, -EIO, "cannot read the FGU\n");
 	uv = fgu_uv(fgu, volt & 0x1fff);
 	ua = fgu_ua(fgu, curt & 0x3fff);
 	ocv = sc2723_fgu_ocv_uv(fgu, uv, ua);
-	fgu->soc = clamp(power_supply_batinfo_ocv2cap(fgu->info, ocv, 20),
-			 0, 100);
+	soc = clamp(power_supply_batinfo_ocv2cap(fgu->info, ocv, 20), 0, 100);
+	fgu->soc = soc;
+	if (FIELD_GET(USER_AREA_TYPE, saved) == USER_AREA_TYPE_NORMAL &&
+	    FIELD_GET(USER_AREA_SOC, saved) <= 100 &&
+	    abs((int)FIELD_GET(USER_AREA_SOC, saved) - soc) <= FGU_SAVED_MAX_DIFF)
+		fgu->soc = FIELD_GET(USER_AREA_SOC, saved);
 	fgu->status = POWER_SUPPLY_STATUS_UNKNOWN;
 	sc2723_fgu_anchor(fgu, fgu->soc);
+	sc2723_fgu_save(fgu->soc);
 	dev_info(dev,
-		 "VOLT %d = %d mV, CURT %d = %d mA, OCV %d mV = %d %%, CLBCNT %08x, USER_AREA %04x\n",
-		 volt, uv / 1000, curt, ua / 1000, ocv / 1000, fgu->soc,
-		 fgu->cc0, fgu_read(FGU_USER_AREA));
+		 "VOLT %d = %d mV, CURT %d = %d mA, OCV %d mV = %d %%, CLBCNT %08x, USER_AREA %04x, start %d %%\n",
+		 volt, uv / 1000, curt, ua / 1000, ocv / 1000, soc,
+		 fgu->cc0, saved, fgu->soc);
 
 	/* runs before the supply is unregistered (devm order) */
 	ret = devm_add_action_or_reset(dev, sc2723_fgu_stop, fgu);
 	if (ret)
 		return ret;
 	WRITE_ONCE(fgu->ready, true);
-	schedule_delayed_work(&fgu->work, 0);
+	queue_delayed_work(system_dfl_wq, &fgu->work, 0);
 	return 0;
 }
 
