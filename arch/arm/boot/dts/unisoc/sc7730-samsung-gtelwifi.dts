@@ -199,6 +199,8 @@
 	aliases {
 		mmc0 = &emmc;
 		mmc1 = &sdio1;
+		mmc2 = &sdio0;
+		serial0 = &uart0;
 		serial1 = &uart1;
 	};
 
@@ -255,6 +257,32 @@
 		height = <1280>;
 		stride = <(800 * 4)>;
 		format = "x8r8g8b8";	/* verified on the panel, Test 1b */
+		backlight = <&backlight>;
+	};
+
+	/*
+	 * PWM3 into the RT8555 LED driver (i2c-gpio 65/66 @ 0x31, EN GPIO
+	 * 155), which the bootloader sets up and leaves enabled; brightness
+	 * 0 is the vendor's off state. 20.4 kHz like the vendor, duty 143
+	 * as the bootloader leaves it.
+	 */
+	/* SC2723 LDO_SDCORE: microSD VDD and the SD0 pads (3 V mode only) */
+	vddsdcore: regulator-vddsdcore {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddsdcore";
+		sprd,pd-reg = <0x814 10>;
+		sprd,vsel-reg = <0x830 0xff00>;
+		/* min = max: the core sets 3.0 V at registration */
+		regulator-min-microvolt = <3000000>;
+		regulator-max-microvolt = <3000000>;
+	};
+
+	backlight: backlight {
+		compatible = "pwm-backlight";
+		pwms = <&pwm 3 49039>;
+		brightness-levels = <0 255>;
+		num-interpolated-steps = <255>;
+		default-brightness-level = <143>;
 	};
 };
 
@@ -263,6 +291,39 @@
  * bootloader muxes to the keypad. The vendor tree also lists Volume Down
  * at row 1/column 0, but never scans column 0.
  */
+&pwm {
+	status = "okay";
+};
+
+&sdio0 {
+	bus-width = <4>;
+	cd-gpios = <&gpio 71 GPIO_ACTIVE_LOW>;	/* external pull-up */
+	cd-debounce-delay-ms = <200>;
+	disable-wp;
+	cap-sd-highspeed;
+	max-frequency = <50000000>;		/* 384 MHz / 8 = 48 MHz */
+	no-1-8-v;				/* card VDD is the pad supply */
+	sdhci-caps-mask = <0x0 0x05000000>;	/* vendor: 3.0 V only */
+	vmmc-supply = <&vddsdcore>;
+	status = "okay";
+};
+
+/*
+ * BCM43430A1 Bluetooth. Wake lines (BT_WAKE GPIO 45, HOST_WAKE GPIO 46)
+ * come later: without a host wake IRQ hci_bcm never lets the chip sleep.
+ */
+&uart0 {
+	status = "okay";
+
+	bluetooth {
+		compatible = "brcm,bcm43430a1-bt";
+		shutdown-gpios = <&gpio 47 GPIO_ACTIVE_HIGH>;
+		clocks = <&clk_aux0>;
+		clock-names = "lpo";
+		max-speed = <2000000>;
+	};
+};
+
 &keypad {
 	keypad,num-rows = <1>;
 	keypad,num-columns = <3>;
