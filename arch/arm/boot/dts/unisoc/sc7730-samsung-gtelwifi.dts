@@ -303,6 +303,23 @@
 	status = "okay";
 };
 
+/*
+ * Accelerometer, ST LIS2HH12 (Samsung calls it K2HH). Axes as the vendor
+ * maps them: X = -Y_chip, Y = X_chip, Z = -Z_chip. The data-ready line
+ * (GPIO 164) is left out, user space polls.
+ */
+&i2c2 {
+	status = "okay";
+
+	accelerometer@1d {
+		compatible = "st,lis2hh12";
+		reg = <0x1d>;
+		mount-matrix = "0", "-1", "0",
+			       "1", "0", "0",
+			       "0", "0", "-1";
+	};
+};
+
 &sdio0 {
 	bus-width = <4>;
 	cd-gpios = <&gpio 71 GPIO_ACTIVE_LOW>;	/* external pull-up */
