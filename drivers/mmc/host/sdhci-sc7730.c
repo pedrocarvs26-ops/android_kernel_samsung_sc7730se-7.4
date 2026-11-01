@@ -10,12 +10,16 @@
  * Until this SoC has a clock driver, the base clock is read back from the
  * AP clock mux the bootloader programmed ("clk-cfg", bits 1:0 select one of
  * "sprd,clk-parent-rates"), so the card is never clocked faster than the
- * divider math assumes. Pinmux and card power are left as the bootloader set
+ * divider math assumes. A host the bootloader leaves alone (the microSD
+ * slot SDIO0) can select its parent with "sprd,clk-sel"; its clock config
+ * also has a divider in bits 10:8 ("sprd,clk-has-div"), which is then
+ * cleared. Pinmux and card power are left as the bootloader set
  * them up, and so are gate and reset unless an "ap-ahb" region is given
  * (EB at +0, RST at +4, bits in "sprd,ahb-eb-bit"/"sprd,ahb-rst-bit"): the
  * bootloader only enables the eMMC host, the WLAN slot SDIO1 stays gated.
  */
 
+#include <linux/bitfield.h>
 #include <linux/bits.h>
 #include <linux/delay.h>
 #include <linux/io.h>
@@ -27,6 +31,7 @@
 #include "sdhci-pltfm.h"
 
 #define SC7730_CLK_SEL_MASK	0x3
+#define SC7730_CLK_DIV_MASK	GENMASK(10, 8)
 
 #define SC7730_AHB_EB		0x0
 #define SC7730_AHB_RST		0x4
@@ -70,6 +75,8 @@ static const struct sdhci_ops sc7730_sdhci_ops = {
 	.set_bus_width		= sdhci_set_bus_width,
 	.reset			= sdhci_reset,
 	.set_uhs_signaling	= sc7730_sdhci_set_uhs_signaling,
+	/* with a vmmc regulator also the voltage bits, like the vendor */
+	.set_power		= sdhci_set_power_and_bus_voltage,
 };
 
 static const struct sdhci_pltfm_data sc7730_sdhci_pdata = {
@@ -116,7 +123,7 @@ static int sc7730_sdhci_probe(struct platform_device *pdev)
 	struct sc7730_sdhci *priv;
 	struct sdhci_host *host;
 	void __iomem *clk_cfg;
-	u32 rates[4], sel;
+	u32 rates[4], sel, cfg, div = 0;
 	int ret;
 
 	host = sdhci_pltfm_init(pdev, &sc7730_sdhci_pdata, sizeof(*priv));
@@ -135,8 +142,16 @@ static int sc7730_sdhci_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(dev, ret, "missing sprd,clk-parent-rates\n");
 
-	sel = readl(clk_cfg) & SC7730_CLK_SEL_MASK;
-	priv->base_clk = rates[sel];
+	cfg = readl(clk_cfg);
+	if (!of_property_read_u32(dev->of_node, "sprd,clk-sel", &sel) &&
+	    sel <= SC7730_CLK_SEL_MASK) {
+		cfg = (cfg & ~(SC7730_CLK_SEL_MASK | SC7730_CLK_DIV_MASK)) | sel;
+		writel(cfg, clk_cfg);
+	}
+	if (of_property_read_bool(dev->of_node, "sprd,clk-has-div"))
+		div = FIELD_GET(SC7730_CLK_DIV_MASK, cfg);
+	sel = cfg & SC7730_CLK_SEL_MASK;
+	priv->base_clk = rates[sel] / (div + 1);
 
 	of_property_read_u32(dev->of_node, "sprd,write-delay", &priv->write_delay);
 	of_property_read_u32(dev->of_node, "sprd,read-pos-delay",
