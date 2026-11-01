@@ -217,6 +217,15 @@ config SPRD_CLK_AUX0
 	  the Broadcom WLAN chip on the Galaxy Tab E. Stop-gap until there
 	  is a clock driver for the SC7730.
 
+config SPRD_SC2723_FGU
+	bool "SC2723 PMIC fuel gauge as battery supply (bring-up glue)"
+	depends on ARCH_SPRD && POWER_SUPPLY
+	select SPRD_ADI
+	help
+	  Battery voltage, current and state of charge from the fuel gauge
+	  of the SC2723 PMIC, polled over the ADI bus, until the mainline
+	  sc27xx drivers support the SC2723.
+
 config SPRD_ADI
 	bool
 
