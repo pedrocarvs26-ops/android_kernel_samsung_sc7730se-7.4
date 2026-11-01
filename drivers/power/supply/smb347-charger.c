@@ -47,6 +47,9 @@
 #define CFG_CURRENT_LIMIT_USB_MASK		0x0f
 #define CFG_AICL				0x02
 #define CFG_AICL_EN				BIT(4)
+#define CFG_CHARGE_CONTROL			0x04
+#define CFG_CHARGE_CONTROL_RECHARGE_DIS		BIT(7)
+#define CFG_CHARGE_CONTROL_TERM_DIS		BIT(6)
 #define CFG_FLOAT_VOLTAGE			0x03
 #define CFG_FLOAT_VOLTAGE_FLOAT_MASK		0x3f
 #define CFG_FLOAT_VOLTAGE_THRESHOLD_MASK	0xc0
@@ -467,6 +470,21 @@ static int smb347_set_charge_current(struct smb347_charger *smb)
 					 CFG_CHARGE_CURRENT_TC_MASK, ret);
 		if (ret < 0)
 			return ret;
+
+		/*
+		 * The Samsung bootloader leaves termination and automatic
+		 * recharge off on the SMB358 (the vendor kernel ran both in
+		 * software); without termination the battery sits at the
+		 * float voltage forever. This driver has no software
+		 * recharge, so the charger has to restart by itself.
+		 */
+		if (id == SMB358) {
+			ret = regmap_clear_bits(smb->regmap, CFG_CHARGE_CONTROL,
+						CFG_CHARGE_CONTROL_RECHARGE_DIS |
+						CFG_CHARGE_CONTROL_TERM_DIS);
+			if (ret < 0)
+				return ret;
+		}
 	}
 
 	return 0;
@@ -1287,6 +1305,7 @@ static bool smb347_readable_reg(struct device *dev, unsigned int reg)
 	case CFG_CURRENT_LIMIT:
 	case CFG_AICL:
 	case CFG_FLOAT_VOLTAGE:
+	case CFG_CHARGE_CONTROL:
 	case CFG_STAT:
 	case CFG_PIN:
 	case CFG_THERM:
