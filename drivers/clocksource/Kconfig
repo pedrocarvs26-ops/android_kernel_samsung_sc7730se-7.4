@@ -515,6 +515,15 @@ config MTK_CPUX_TIMER
 	help
 	  Support for MediaTek CPUXGPT timer driver.
 
+config SPRD_SC8830_TIMER
+	bool "Spreadtrum SC8830/SC7730 32-bit timer" if COMPILE_TEST
+	depends on HAS_IOMEM
+	select TIMER_OF
+	select CLKSRC_MMIO
+	help
+	  Enables the 32-bit general purpose timer of the Spreadtrum
+	  SC8830/SC7730 ("scx35") family as clocksource and clockevent.
+
 config SPRD_TIMER
 	bool "Spreadtrum timer driver" if EXPERT
 	depends on HAS_IOMEM

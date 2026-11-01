@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Samsung Galaxy Tab E 9.6 WiFi (SM-T560, "gtelwifi")
+ *
+ * Panel: Novatek NT51017 (BOE), 800x1280 MIPI DSI video mode, native
+ * portrait. Touch: Zinitix ZT7554 on I2C. Charger: SMB358.
+ */
+
+/dts-v1/;
+
+#include "sc7730.dtsi"
+
+/ {
+	model = "Samsung Galaxy Tab E 9.6 (SM-T560)";
+	compatible = "samsung,gtelwifi", "sprd,sc7730";
+
+	/*
+	 * Board id the Spreadtrum bootloader matches against dt.img.
+	 * The build script generates one copy per hardware revision.
+	 */
+	sprd,sc-id = <8830 11 0x20000>;
+
+	aliases {
+		serial1 = &uart1;
+	};
+
+	chosen {
+		/* The bootloader rewrites this, the kernel appends its own */
+		bootargs = "";
+	};
+
+	/* The bootloader patches the real size in */
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x80000000 0x60000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		smem@87800000 {
+			reg = <0x87800000 0x240000>;
+			no-map;
+		};
+
+		cp-modem@88000000 {
+			reg = <0x88000000 0x1c00000>;
+			no-map;
+		};
+
+		/* vendor kernel framebuffer, also our fallback scan-out */
+		framebuffer@9ea44000 {
+			reg = <0x9ea44000 0xbb8000>;
+			no-map;
+		};
+
+		/*
+		 * Kernel log survives a warm reboot here. Lies inside the area
+		 * the vendor kernel reserves for ION, so TWRP will not touch it.
+		 */
+		ramoops@9fc00000 {
+			compatible = "ramoops";
+			reg = <0x9fc00000 0x100000>;
+			record-size = <0x20000>;
+			console-size = <0x40000>;
+			pmsg-size = <0x20000>;
+		};
+	};
+
+	/* Scan-out buffer left running by the bootloader (if lcd_base matches) */
+	framebuffer@9ea44000 {
+		compatible = "simple-framebuffer";
+		reg = <0x9ea44000 (800 * 1280 * 4)>;
+		width = <800>;
+		height = <1280>;
+		stride = <(800 * 4)>;
+		format = "x8r8g8b8";	/* channel order still unverified */
+	};
+};

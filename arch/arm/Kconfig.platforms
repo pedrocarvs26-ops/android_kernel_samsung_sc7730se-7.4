@@ -159,6 +159,26 @@ config ARCH_RDA
 	help
 	  This enables support for the RDA Micro 8810PL SoC family.
 
+config ARCH_SPRD
+	bool "Spreadtrum/Unisoc 32-bit SoCs (SC7730/SC8830 \"shark\")"
+	depends on ARCH_MULTI_V7
+	select ARM_GIC
+	select HAVE_ARM_ARCH_TIMER
+	select SPRD_SC8830_TIMER
+	help
+	  Support for the 32-bit Spreadtrum SC7730/SC8830 ("scx35"/"shark")
+	  family, e.g. the Samsung Galaxy Tab E 9.6 (SM-T560, gtelwifi).
+
+config SPRD_BOOTSTRIPES
+	bool "Paint boot progress stripes into the bootloader framebuffer"
+	depends on ARCH_SPRD
+	help
+	  Debug aid for bring-up without a serial console. The Spreadtrum
+	  bootloader passes the scan-out buffer of its splash screen as
+	  "lcd_base=<hex>" on the command line. With this option the kernel
+	  reserves that buffer and paints a white band for every boot stage
+	  it reaches, so a photo of the screen shows where boot stopped.
+
 menuconfig ARCH_SUNPLUS
 	bool "Sunplus SoCs"
 	depends on ARCH_MULTI_V7

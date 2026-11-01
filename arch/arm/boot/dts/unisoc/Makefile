@@ -2,3 +2,5 @@
 dtb-$(CONFIG_ARCH_RDA) += \
 	rda8810pl-orangepi-2g-iot.dtb \
 	rda8810pl-orangepi-i96.dtb
+dtb-$(CONFIG_ARCH_SPRD) += \
+	sc7730-samsung-gtelwifi.dtb

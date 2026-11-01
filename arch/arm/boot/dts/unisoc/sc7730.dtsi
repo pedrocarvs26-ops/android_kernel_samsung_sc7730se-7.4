@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Spreadtrum SC7730 ("scx35", "shark") SoC, 4x Cortex-A7, Mali-400 MP2.
+ *
+ * Addresses are physical and come from the vendor 3.10 kernel
+ * (arch/arm/mach-sc/include/mach/__hardware-sc8830.h). The vendor
+ * device tree uses static virtual mappings (0xf5xxxxxx), translated here.
+ *
+ * Only what is needed for a first mainline boot is described: one CPU,
+ * GIC, timer, UART. Everything else is still set up by the bootloader.
+ */
+
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	interrupt-parent = <&gic>;
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/* Secondary CPUs need the Spreadtrum holding-pen, not yet */
+		cpu0: cpu@f00 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0xf00>;
+		};
+	};
+
+	ext_26m: clock-26m {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <26000000>;
+		clock-output-names = "ext-26m";
+	};
+
+	soc {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		gic: interrupt-controller@12001000 {
+			compatible = "arm,cortex-a7-gic";
+			#interrupt-cells = <3>;
+			interrupt-controller;
+			reg = <0x12001000 0x1000>,
+			      <0x12002000 0x2000>;
+		};
+
+		timer@40050000 {
+			compatible = "sprd,sc8830-timer";
+			reg = <0x40050000 0x60>,	/* AON timer block */
+			      <0x402e0000 0x10>,	/* AON APB clock gates */
+			      <0x71300000 0x10>,	/* AP APB clock gates */
+			      <0x71400000 0x20>,	/* INTC0 */
+			      <0x40200000 0x20>;	/* wake-up mux */
+			reg-names = "timer", "aon-apb", "ap-apb", "intc", "intmux";
+			interrupts = <GIC_SPI 28 IRQ_TYPE_LEVEL_HIGH>;
+			clock-frequency = <32768>;
+			sprd,intmux-bit = <2>;
+		};
+
+		uart1: serial@70100000 {
+			compatible = "sprd,sc9836-uart";
+			reg = <0x70100000 0x100>;
+			interrupts = <GIC_SPI 3 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ext_26m>;
+			clock-names = "uart";
+			status = "disabled";
+		};
+	};
+};

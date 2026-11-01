@@ -26,6 +26,7 @@
 #include <linux/delay.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
+#include <linux/sprd-bootstripes.h>
 #include <linux/initrd.h>
 #include <linux/memblock.h>
 #include <linux/acpi.h>
@@ -1104,6 +1105,7 @@ void start_kernel(void)
 	sort_main_extable();
 	trap_init();
 	mm_core_init();
+	sprd_bootstripe(SPRD_STRIPE_MM);
 	maple_tree_init();
 	poking_init();
 	ftrace_init();
@@ -1158,6 +1160,7 @@ void start_kernel(void)
 	vdso_setup_data_pages();
 	timekeeping_init();
 	time_init();
+	sprd_bootstripe(SPRD_STRIPE_TIME);
 
 	/* This must be after timekeeping is initialized */
 	random_init();
@@ -1173,6 +1176,7 @@ void start_kernel(void)
 
 	early_boot_irqs_disabled = false;
 	local_irq_enable();
+	sprd_bootstripe(SPRD_STRIPE_IRQ_ON);
 
 	kmem_cache_init_late();
 
@@ -1182,6 +1186,7 @@ void start_kernel(void)
 	 * this. But we do want output early, in case something goes wrong.
 	 */
 	console_init();
+	sprd_bootstripe(SPRD_STRIPE_CONSOLE);
 	if (panic_later)
 		panic("Too many boot %s vars at `%s'", panic_later,
 		      panic_param);
@@ -1211,6 +1216,7 @@ void start_kernel(void)
 		late_time_init();
 	sched_clock_init();
 	calibrate_delay();
+	sprd_bootstripe(SPRD_STRIPE_CALIBRATE);
 
 	arch_cpu_finalize_init();
 
@@ -1612,6 +1618,8 @@ static int __ref kernel_init(void *unused)
 {
 	int ret;
 
+	sprd_bootstripe(SPRD_STRIPE_KINIT);
+
 	init_userspace_fs();
 
 	/*
@@ -1644,6 +1652,7 @@ static int __ref kernel_init(void *unused)
 
 	do_sysctl_args();
 
+	sprd_bootstripe(SPRD_STRIPE_EXEC_INIT);
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)
