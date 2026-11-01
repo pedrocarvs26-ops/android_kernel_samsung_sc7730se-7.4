@@ -9,7 +9,9 @@
  */
 
 #include <linux/delay.h>
+#include <linux/devm-helpers.h>
 #include <linux/err.h>
+#include <linux/extcon.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -43,6 +45,8 @@
 #define CFG_CURRENT_LIMIT_DC_MASK		0xf0
 #define CFG_CURRENT_LIMIT_DC_SHIFT		4
 #define CFG_CURRENT_LIMIT_USB_MASK		0x0f
+#define CFG_AICL				0x02
+#define CFG_AICL_EN				BIT(4)
 #define CFG_FLOAT_VOLTAGE			0x03
 #define CFG_FLOAT_VOLTAGE_FLOAT_MASK		0x3f
 #define CFG_FLOAT_VOLTAGE_THRESHOLD_MASK	0xc0
@@ -99,6 +103,8 @@
 #define CMD_A_OTG_ENABLED			BIT(4)
 #define CMD_A_ALLOW_WRITE			BIT(7)
 #define CMD_B					0x31
+#define CMD_B_HC_MODE				BIT(0)
+#define CMD_B_USB5				BIT(1)
 #define CMD_C					0x33
 
 /* Interrupt Status registers */
@@ -225,6 +231,10 @@ struct smb347_charger {
 	bool			use_usb_otg;
 	unsigned int		enable_control;
 	unsigned int		inok_polarity;
+
+	struct extcon_dev	*edev;
+	struct notifier_block	extcon_nb;
+	struct work_struct	extcon_work;
 };
 
 enum smb_charger_chipid {
@@ -266,8 +276,9 @@ static const unsigned int icl_tbl[NUM_CHIP_TYPES][10] = {
 		     1800000, 2000000, 2000000, 2000000, 2000000 },
 	[SMB347] = {  300000,  500000,  700000,  900000, 1200000,
 		     1500000, 1800000, 2000000, 2200000, 2500000 },
-	[SMB358] = {  300000,  500000,  700000, 1000000, 1500000,
-		     1800000, 2000000, 2000000, 2000000, 2000000 },
+	/* as programmed by the Samsung SMB358 driver and bootloader */
+	[SMB358] = {  300000,  500000,  700000, 1000000, 1200000,
+		     1500000, 1800000, 2000000, 2000000, 2000000 },
 };
 
 /* Charge current compensation in uA */
@@ -695,6 +706,69 @@ static int smb347_set_writable(struct smb347_charger *smb, bool writable,
 		enable_irq(client->irq);
 
 	return ret;
+}
+
+/*
+ * Input mode by the charger type an extcon device (a MUIC) reports: USB5
+ * (500 mA) on a standard host port, high-current mode with the
+ * summit,mains-current-limit-microamp input limit on a dedicated charger,
+ * and at most 1.5 A on a charging downstream port. AICL backs off on
+ * sources that cannot deliver the limit.
+ */
+static void smb347_extcon_work(struct work_struct *work)
+{
+	struct smb347_charger *smb = container_of(work, struct smb347_charger,
+						  extcon_work);
+	unsigned int limit = 0, cmd_b = CMD_B_USB5;
+	int code, ret;
+
+	if (extcon_get_state(smb->edev, EXTCON_CHG_USB_DCP) > 0)
+		limit = smb->mains_current_limit;
+	else if (extcon_get_state(smb->edev, EXTCON_CHG_USB_CDP) > 0)
+		limit = min_not_zero(smb->mains_current_limit, 1500000U);
+
+	if (limit) {
+		code = current_to_hw(icl_tbl[smb->id],
+				     ARRAY_SIZE(icl_tbl[smb->id]), limit);
+		if (code < 0) {
+			ret = code;
+			goto out;
+		}
+		limit = icl_tbl[smb->id][code];
+
+		ret = smb347_set_writable(smb, true, true);
+		if (ret < 0)
+			goto out;
+		ret = regmap_update_bits(smb->regmap, CFG_CURRENT_LIMIT,
+					 CFG_CURRENT_LIMIT_DC_MASK,
+					 code << CFG_CURRENT_LIMIT_DC_SHIFT);
+		if (!ret)
+			ret = regmap_set_bits(smb->regmap, CFG_AICL, CFG_AICL_EN);
+		smb347_set_writable(smb, false, true);
+		if (ret < 0)
+			goto out;
+		cmd_b |= CMD_B_HC_MODE;
+	}
+
+	ret = regmap_update_bits(smb->regmap, CMD_B,
+				 CMD_B_HC_MODE | CMD_B_USB5, cmd_b);
+out:
+	if (ret < 0)
+		dev_err(smb->dev, "failed to set the input mode: %d\n", ret);
+	else
+		dev_info(smb->dev, "input limit %u mA\n",
+			limit ? limit / 1000 : 500);
+}
+
+static int smb347_extcon_notifier(struct notifier_block *nb,
+				  unsigned long event, void *ptr)
+{
+	struct smb347_charger *smb = container_of(nb, struct smb347_charger,
+						  extcon_nb);
+
+	/* called under the extcon spinlock, the I2C access has to wait */
+	schedule_work(&smb->extcon_work);
+	return NOTIFY_OK;
 }
 
 static int smb347_hw_init(struct smb347_charger *smb)
@@ -1211,6 +1285,7 @@ static bool smb347_readable_reg(struct device *dev, unsigned int reg)
 	switch (reg) {
 	case CFG_CHARGE_CURRENT:
 	case CFG_CURRENT_LIMIT:
+	case CFG_AICL:
 	case CFG_FLOAT_VOLTAGE:
 	case CFG_STAT:
 	case CFG_PIN:
@@ -1552,6 +1627,14 @@ static int smb347_probe(struct i2c_client *client)
 	if (IS_ERR(smb->regmap))
 		return PTR_ERR(smb->regmap);
 
+	/* before anything is registered, the MUIC may not be there yet */
+	if (device_property_present(dev, "extcon")) {
+		smb->edev = extcon_get_edev_by_phandle(dev, 0);
+		if (IS_ERR(smb->edev))
+			return dev_err_probe(dev, PTR_ERR(smb->edev),
+					     "cannot get the extcon device\n");
+	}
+
 	mains_usb_cfg.drv_data = smb;
 	mains_usb_cfg.fwnode = dev_fwnode(dev);
 	if (smb->use_mains) {
@@ -1579,6 +1662,19 @@ static int smb347_probe(struct i2c_client *client)
 	ret = smb347_irq_init(smb, client);
 	if (ret)
 		return ret;
+
+	if (smb->edev) {
+		ret = devm_work_autocancel(dev, &smb->extcon_work,
+					   smb347_extcon_work);
+		if (ret)
+			return ret;
+		smb->extcon_nb.notifier_call = smb347_extcon_notifier;
+		ret = devm_extcon_register_notifier_all(dev, smb->edev,
+							&smb->extcon_nb);
+		if (ret)
+			return ret;
+		schedule_work(&smb->extcon_work);
+	}
 
 	usb_rdev_cfg.dev = dev;
 	usb_rdev_cfg.driver_data = smb;
