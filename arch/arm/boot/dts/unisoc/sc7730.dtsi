@@ -68,6 +68,11 @@
 		 * clock and resets are still done by mach-sprd/usb-bringup.c.
 		 * No VBUS sensing wired to the core: the role switch override
 		 * forces the B-session valid, like the vendor driver does.
+		 *
+		 * FIFOs (32-bit words) as in the vendor dwc_otg for SCX35, only
+		 * TX FIFO 15 trimmed so everything fits the 3598-word SPRAM.
+		 * TX FIFOs 1 and 2 are only 0x40 deep, too small for HS bulk;
+		 * the dwc2 defaults left no FIFO for a 512-byte bulk IN endpoint.
 		 */
 		usb: usb@20200000 {
 			compatible = "snps,dwc2";
@@ -76,6 +81,10 @@
 			dr_mode = "peripheral";
 			usb-role-switch;
 			role-switch-default-mode = "peripheral";
+			g-rx-fifo-size = <0x320>;
+			g-np-tx-fifo-size = <0x10>;
+			g-tx-fifo-size = <0x40 0x40 0x100 0x100 0x100 0x100 0x100
+					  0x80 0x80 0x80 0x80 0x80 0x80 0x80 0x100>;
 			status = "disabled";
 		};
 
