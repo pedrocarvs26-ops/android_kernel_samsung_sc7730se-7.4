@@ -182,10 +182,23 @@ config SPRD_BOOTSTRIPES
 config SPRD_USB_BRINGUP
 	bool "Power up the SC7730 USB PHY for dwc2 (bring-up hack)"
 	depends on ARCH_SPRD && USB_DWC2
+	select SPRD_ADI
 	help
 	  Switches on the SC2723 USB LDO, the USB PHY, its AHB clock and
 	  resets, then writes the PHY tune value, following the vendor
 	  kernel. Stop-gap until clock, PHY and regulator drivers exist.
+
+config SPRD_RESTART
+	bool "Restart through the SC2723 PMIC watchdog"
+	depends on ARCH_SPRD
+	select SPRD_ADI
+	help
+	  Restart handler for the SC7730: leaves the boot mode for the
+	  bootloader ("reboot recovery" boots the recovery partition) and
+	  lets the PMIC watchdog reset the system, as the vendor kernel does.
+
+config SPRD_ADI
+	bool
 
 menuconfig ARCH_SUNPLUS
 	bool "Sunplus SoCs"
