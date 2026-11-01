@@ -714,6 +714,17 @@ config MMC_SDHCI_SPRD
 
 	  If unsure, say N.
 
+config MMC_SDHCI_SC7730
+	tristate "Spreadtrum SC7730/SC8830 SD/eMMC host controller"
+	depends on ARCH_SPRD || COMPILE_TEST
+	depends on MMC_SDHCI_PLTFM
+	help
+	  This selects the SDHCI 3.0 based SD/SDIO/eMMC controllers of the
+	  32-bit Spreadtrum SC7730/SC8830 ("shark") SoCs, e.g. in the
+	  Samsung Galaxy Tab E 9.6 (SM-T560).
+
+	  If unsure, say N.
+
 config MMC_TMIO_CORE
 	tristate
 

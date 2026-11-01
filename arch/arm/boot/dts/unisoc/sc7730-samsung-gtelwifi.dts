@@ -83,3 +83,18 @@
 &usb {
 	status = "okay";
 };
+
+/*
+ * First eMMC bring-up: SDR high speed only. The vendor runs DDR52 at
+ * 1.8 V I/O with extra delay-line settings, that comes later.
+ */
+&emmc {
+	bus-width = <8>;
+	non-removable;
+	no-sd;
+	no-sdio;
+	no-1-8-v;
+	cap-mmc-highspeed;
+	max-frequency = <52000000>;
+	status = "okay";
+};
