@@ -28,7 +28,8 @@
 #define BAND_H		80
 
 /* Fallback: buffer reserved for the display by the vendor device tree */
-static phys_addr_t lcd_base = 0x9ea44000;
+#define DT_LCD_BASE	0x9ea44000
+static phys_addr_t lcd_base = DT_LCD_BASE;
 static u32 __iomem *fb;
 
 /*
@@ -36,7 +37,9 @@ static u32 __iomem *fb;
  * the buffer can still be removed from the linear map here. That is
  * required: ARM refuses ioremap() of RAM that is linearly mapped, and the
  * kernel must never hand out the pages the display is scanning out.
- * Without lcd_base= the device tree reserves the fallback region.
+ * The device tree reserves the usual buffer (no-map) itself; reserving it
+ * here as well makes its reserved-memory node fail, so only a buffer at
+ * another address is taken out here.
  */
 static int __init sprd_lcd_base_setup(char *s)
 {
@@ -45,6 +48,8 @@ static int __init sprd_lcd_base_setup(char *s)
 	if (!s || kstrtoul(s, 16, &v) || !v)
 		return 0;
 	lcd_base = v;
+	if (lcd_base == DT_LCD_BASE)
+		return 0;
 	memblock_reserve(lcd_base, PAGE_ALIGN(FB_SIZE));
 	memblock_mark_nomap(lcd_base, PAGE_ALIGN(FB_SIZE));
 	return 0;

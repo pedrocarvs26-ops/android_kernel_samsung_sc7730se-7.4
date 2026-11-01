@@ -24,6 +24,7 @@
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/printk.h>
+#include <linux/sprintf.h>
 
 #define ADI_PHYS		0x40030000
 #define ADI_RD_CMD		0x24
@@ -55,7 +56,11 @@
 #define AP_APB_PHY_CTRL_BIT9	BIT(9)
 
 #define USB_PHYS		0x20200000
+#define DWC2_GRXFSIZ		0x24
+#define DWC2_GNPTXFSIZ		0x28
 #define DWC2_GSNPSID		0x40
+#define DWC2_GHWCFG(n)		(0x44 + 4 * ((n) - 1))
+#define DWC2_DPTXFSIZN(n)	(0x104 + 4 * ((n) - 1))
 
 /* "tune_value" of the vendor usb@f5116000 node for gtelwifi */
 #define GTELWIFI_PHY_TUNE	0x44076e33
@@ -119,7 +124,7 @@ static int __init sprd_usb_bringup(void)
 	aon = ioremap(AON_APB_PHYS, 0x100);
 	ahb = ioremap(AP_AHB_PHYS, 0x100);
 	apb = ioremap(AP_APB_PHYS + AP_APB_USB_PHY_TUNE, 0x10);
-	usb = ioremap(USB_PHYS, 0x100);
+	usb = ioremap(USB_PHYS, 0x200);
 	if (!adi || !ana || !aon || !ahb || !apb || !usb) {
 		pr_err("sprd-usb: ioremap failed\n");
 		goto out;
@@ -156,6 +161,21 @@ static int __init sprd_usb_bringup(void)
 	pr_info("sprd-usb: after: PWR_CTRL %08x AHB_EB %08x PHY_CTRL %08x TUNE %08x GSNPSID %08x\n",
 		readl(aon + AON_APB_PWR_CTRL), readl(ahb + AP_AHB_EB),
 		readl(apb + 8), readl(apb), readl(usb + DWC2_GSNPSID));
+
+	/* Reset values = what the core was synthesized with (FIFO maxima) */
+	pr_info("sprd-usb: GHWCFG1-4 %08x %08x %08x %08x GRXFSIZ %08x GNPTXFSIZ %08x\n",
+		readl(usb + DWC2_GHWCFG(1)), readl(usb + DWC2_GHWCFG(2)),
+		readl(usb + DWC2_GHWCFG(3)), readl(usb + DWC2_GHWCFG(4)),
+		readl(usb + DWC2_GRXFSIZ), readl(usb + DWC2_GNPTXFSIZ));
+	{
+		char buf[16 * 6] = "", *p = buf;
+		int n;
+
+		for (n = 1; n <= 15; n++)
+			p += scnprintf(p, buf + sizeof(buf) - p, " %x",
+				       readl(usb + DWC2_DPTXFSIZN(n)) >> 16);
+		pr_info("sprd-usb: DPTXFSIZ1-15 depth:%s\n", buf);
+	}
 out:
 	if (usb)
 		iounmap(usb);
