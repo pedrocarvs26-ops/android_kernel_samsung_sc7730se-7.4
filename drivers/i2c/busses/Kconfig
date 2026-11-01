@@ -1178,6 +1178,14 @@ config I2C_SPRD
 	  If you say yes to this option, support will be included for the
 	  Spreadtrum I2C interface.
 
+config I2C_SPRD_SC8830
+	tristate "Spreadtrum SC8830/SC7730 I2C interface"
+	depends on ARCH_SPRD || COMPILE_TEST
+	help
+	  The byte-at-a-time I2C controllers of the 32-bit Spreadtrum
+	  SC8830/SC7730 ("shark") SoCs, e.g. in the Samsung Galaxy Tab E.
+	  Not the same IP as I2C_SPRD.
+
 config I2C_ST
 	tristate "STMicroelectronics SSC I2C support"
 	depends on ARCH_STI || COMPILE_TEST

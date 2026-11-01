@@ -9,6 +9,40 @@
 /dts-v1/;
 
 #include "sc7730.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	/* Touch supply: a GPIO-switched 3.3 V rail, not a PMIC LDO */
+	tsp_ldo: regulator-tsp {
+		compatible = "regulator-fixed";
+		regulator-name = "tsp_ldo";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&gpio 156 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		startup-delay-us = <200000>;	/* vendor waits 200 ms */
+	};
+};
+
+/*
+ * Zinitix ZT7554 (vendor "zinitix,zt7554_ts"); pinmux for I2C1 and the
+ * IRQ pad comes from the bootloader. GPIOs 81/83 only tell the vendor
+ * driver which firmware image to flash.
+ */
+&i2c1 {
+	status = "okay";
+
+	touchscreen@20 {
+		compatible = "zinitix,bt554";
+		reg = <0x20>;
+		interrupt-parent = <&gpio>;
+		interrupts = <82 IRQ_TYPE_EDGE_FALLING>;
+		vcca-supply = <&tsp_ldo>;
+		touchscreen-size-x = <800>;
+		touchscreen-size-y = <1280>;
+	};
+};
 
 / {
 	model = "Samsung Galaxy Tab E 9.6 (SM-T560)";
