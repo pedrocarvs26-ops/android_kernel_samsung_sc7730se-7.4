@@ -88,6 +88,21 @@
 			status = "disabled";
 		};
 
+		/*
+		 * eMMC host (vendor: sdhci@f511c000, "sprd,sdhci-shark", id 3).
+		 * Base clock: AP_CLK_EMMC_CFG mux, 26/256/312/384 MHz. Gate
+		 * (AP_AHB_EB bit 11), pinmux and card power come from the
+		 * bootloader for now.
+		 */
+		emmc: mmc@20600000 {
+			compatible = "sprd,sc7730-sdhci";
+			reg = <0x20600000 0x1000>, <0x71200054 0x4>;
+			reg-names = "sdhci", "clk-cfg";
+			interrupts = <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>;
+			sprd,clk-parent-rates = <26000000 256000000 312000000 384000000>;
+			status = "disabled";
+		};
+
 		uart1: serial@70100000 {
 			compatible = "sprd,sc9836-uart";
 			reg = <0x70100000 0x100>;
