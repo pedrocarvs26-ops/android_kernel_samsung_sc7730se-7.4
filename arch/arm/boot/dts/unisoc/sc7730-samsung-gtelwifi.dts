@@ -60,6 +60,28 @@
 		};
 	};
 
+	/*
+	 * Power (PBINT) and Volume Down (EXT_RSTN) are PMIC inputs, not part
+	 * of the keypad matrix. Power + Volume Down held for ~7-10 s is a
+	 * hardware reset in the PMIC, independent of the kernel.
+	 */
+	gpio-keys {
+		compatible = "gpio-keys-polled";
+		poll-interval = <50>;
+
+		key-power {
+			label = "Power";
+			gpios = <&pmic_eic 2 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_POWER>;
+		};
+
+		key-volume-down {
+			label = "Volume Down";
+			gpios = <&pmic_eic 10 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_VOLUMEDOWN>;
+		};
+	};
+
 	battery: battery {
 		compatible = "simple-battery";
 		charge-full-design-microamp-hours = <5000000>;
@@ -159,6 +181,19 @@
 		stride = <(800 * 4)>;
 		format = "x8r8g8b8";	/* verified on the panel, Test 1b */
 	};
+};
+
+/*
+ * Home and Volume Up: KEYOUT0 with KEYIN1/KEYIN2, the only keypad pads the
+ * bootloader muxes to the keypad. The vendor tree also lists Volume Down
+ * at row 1/column 0, but never scans column 0.
+ */
+&keypad {
+	keypad,num-rows = <1>;
+	keypad,num-columns = <3>;
+	linux,keymap = <MATRIX_KEY(0, 1, KEY_HOMEPAGE)
+			MATRIX_KEY(0, 2, KEY_VOLUMEUP)>;
+	status = "okay";
 };
 
 &usb {
