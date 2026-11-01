@@ -39,6 +39,13 @@
 		#gpio-cells = <2>;
 	};
 
+	ext_32k: clock-32k {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <32768>;
+		clock-output-names = "ext-32k";
+	};
+
 	ext_26m: clock-26m {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
@@ -125,6 +132,31 @@
 			interrupts = <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>;
 			sprd,clk-parent-rates = <26000000 256000000 312000000 384000000>;
 			status = "disabled";
+		};
+
+		/*
+		 * SDIO1, the WLAN slot. Unlike the eMMC host it is left gated by
+		 * the bootloader: AP_AHB EB bit 9, soft reset bit 12. Base clock
+		 * mux AP_CLK_SDIO1_CFG (48/76.8/96/128 MHz, bootloader: 48).
+		 */
+		sdio1: mmc@20400000 {
+			compatible = "sprd,sc7730-sdhci";
+			reg = <0x20400000 0x1000>, <0x7120004c 0x4>,
+			      <0x20d00000 0x8>;
+			reg-names = "sdhci", "clk-cfg", "ap-ahb";
+			interrupts = <GIC_SPI 58 IRQ_TYPE_LEVEL_HIGH>;
+			sprd,clk-parent-rates = <48000000 76800000 96000000 128000000>;
+			sprd,ahb-eb-bit = <9>;
+			sprd,ahb-rst-bit = <12>;
+			status = "disabled";
+		};
+
+		/* CLK_AUX0 pad, 32 kHz (mach-sprd/clk-aux0.c) */
+		clk_aux0: clock-controller@402e0000 {
+			compatible = "sprd,sc7730-aux0-clk";
+			reg = <0x402e0000 0x4000>;
+			clocks = <&ext_32k>;
+			#clock-cells = <0>;
 		};
 
 		/* Same register layout as the SC9860 "d-gpio" block */

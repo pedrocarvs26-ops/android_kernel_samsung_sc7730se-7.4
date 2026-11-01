@@ -82,6 +82,19 @@
 		};
 	};
 
+	/*
+	 * BCM43430 A1: WL_REG_ON is GPIO 230 (high = on, vendor waits 200 ms),
+	 * its 32 kHz LPO comes from CLK_AUX0. Host wake (GPIO 148, level high)
+	 * is not used yet, interrupts come in-band over SDIO.
+	 */
+	wifi_pwrseq: wifi-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		reset-gpios = <&gpio 230 GPIO_ACTIVE_LOW>;
+		clocks = <&clk_aux0>;
+		clock-names = "ext_clock";
+		post-power-on-delay-ms = <200>;
+	};
+
 	battery: battery {
 		compatible = "simple-battery";
 		charge-full-design-microamp-hours = <5000000>;
@@ -123,7 +136,10 @@
 	 */
 	sprd,sc-id = <8830 11 0x20000>;
 
+	/* fixed host numbers: the eMMC must stay mmcblk0 (init, tabflash) */
 	aliases {
+		mmc0 = &emmc;
+		mmc1 = &sdio1;
 		serial1 = &uart1;
 	};
 
@@ -198,6 +214,26 @@
 
 &usb {
 	status = "okay";
+};
+
+&sdio1 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	bus-width = <4>;
+	max-frequency = <50000000>;
+	cap-sd-highspeed;
+	no-1-8-v;		/* the 1.8 V switch fails like on the eMMC host */
+	no-sd;
+	no-mmc;
+	non-removable;
+	keep-power-in-suspend;
+	mmc-pwrseq = <&wifi_pwrseq>;
+	status = "okay";
+
+	wifi@1 {
+		compatible = "brcm,bcm43430a1-fmac", "brcm,bcm4329-fmac";
+		reg = <1>;
+	};
 };
 
 /*
