@@ -62,6 +62,12 @@
 		#gpio-cells = <2>;
 	};
 
+	/* SC2723 auxiliary ADC (mach-sprd/sc2723-adc.c), raw counts */
+	pmic_adc: adc {
+		compatible = "sprd,sc2723-adc-polled";
+		#io-channel-cells = <1>;
+	};
+
 	/*
 	 * Counts the CoreSight timestamp generator TS1 at 26 MHz, which
 	 * mach-sprd/sc7730.c starts (and sets CNTFRQ for). The kernel runs in

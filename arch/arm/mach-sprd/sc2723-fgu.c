@@ -13,6 +13,11 @@
  * in the FGU's always-on USER_AREA, so a reboot continues from it instead
  * of a fresh estimate under load.
  *
+ * The battery thermistor is not wired to the charger but to the PMIC's
+ * auxiliary ADC. With an ADC channel and the vendor's table this reports
+ * the temperature and, like the vendor's sec-battery, stops charging
+ * outside a temperature window through the charger's charge_behaviour.
+ *
  * Register layout, eFuse decoding and formulas from the vendor 3.10 driver
  * (drivers/battery/sprd_2713_fgu.c, drivers/misc/sprd_otp/). Mainline
  * sc27xx_fuel_gauge has the same FGU block but needs a regmap parent, IIO
@@ -23,6 +28,7 @@
 #include <linux/bitfield.h>
 #include <linux/bitops.h>
 #include <linux/delay.h>
+#include <linux/iio/consumer.h>
 #include <linux/math64.h>
 #include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
@@ -79,6 +85,13 @@ struct sc2723_fgu {
 	int soc;		/* last reported capacity, % */
 	int status;
 	bool ready;		/* battery data loaded, polling may run */
+	struct iio_channel *temp_chan;
+	u32 *temp_table;	/* pairs: ADC counts rising, 0.1 C falling */
+	int temp_points;
+	int temp;		/* 0.1 C */
+	bool temp_limits;
+	int stop_lo, stop_hi, resume_lo, resume_hi;	/* 0.1 C */
+	bool inhibited;		/* charging stopped for the temperature */
 };
 
 static int fgu_read(u32 reg)
@@ -218,6 +231,62 @@ static bool sc2723_fgu_charger_full(struct sc2723_fgu *fgu)
 	       val.intval == POWER_SUPPLY_STATUS_FULL;
 }
 
+static int sc2723_fgu_read_temp(struct sc2723_fgu *fgu, int *temp)
+{
+	const u32 *t = fgu->temp_table;
+	int raw, i, ret;
+
+	ret = iio_read_channel_raw(fgu->temp_chan, &raw);
+	if (ret < 0)
+		return ret;
+
+	/* linear between the points, clamped at the ends */
+	if (raw <= t[0]) {
+		*temp = (s32)t[1];
+		return 0;
+	}
+	for (i = 1; i < fgu->temp_points; i++) {
+		int r0 = t[2 * i - 2], r1 = t[2 * i];
+		int c0 = (s32)t[2 * i - 1], c1 = (s32)t[2 * i + 1];
+
+		if (raw <= r1) {
+			*temp = c0 + (c1 - c0) * (raw - r0) / (r1 - r0);
+			return 0;
+		}
+	}
+	*temp = (s32)t[2 * fgu->temp_points - 1];
+	return 0;
+}
+
+static void sc2723_fgu_temp_limits(struct sc2723_fgu *fgu, int temp)
+{
+	union power_supply_propval val;
+	struct power_supply *charger;
+	bool inhibit = fgu->inhibited;
+
+	if (temp <= fgu->stop_lo || temp >= fgu->stop_hi)
+		inhibit = true;
+	else if (temp >= fgu->resume_lo && temp <= fgu->resume_hi)
+		inhibit = false;
+	if (inhibit == fgu->inhibited)
+		return;
+
+	charger = power_supply_get_by_reference(dev_fwnode(fgu->dev),
+						"power-supplies");
+	if (IS_ERR_OR_NULL(charger))
+		return;
+	val.intval = inhibit ? POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE :
+			       POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO;
+	if (!power_supply_set_property(charger,
+				       POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR, &val)) {
+		fgu->inhibited = inhibit;
+		dev_warn(fgu->dev, "battery at %d.%d C, charging %s\n",
+			 temp / 10, abs(temp % 10),
+			 inhibit ? "stopped" : "allowed again");
+	}
+	power_supply_put(charger);
+}
+
 static void sc2723_fgu_update(struct sc2723_fgu *fgu)
 {
 	int volt = fgu_read(FGU_VOLT_VAL), curt = fgu_read(FGU_CURT_VAL);
@@ -265,6 +334,10 @@ static void sc2723_fgu_update(struct sc2723_fgu *fgu)
 		status = POWER_SUPPLY_STATUS_FULL;
 	else
 		status = POWER_SUPPLY_STATUS_NOT_CHARGING;
+
+	if (fgu->temp_chan && !sc2723_fgu_read_temp(fgu, &fgu->temp) &&
+	    fgu->temp_limits)
+		sc2723_fgu_temp_limits(fgu, fgu->temp);
 
 	if (soc != fgu->soc)
 		sc2723_fgu_save(soc);
@@ -347,6 +420,22 @@ static int sc2723_fgu_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN:
 		val->intval = fgu->info->constant_charge_voltage_max_uv;
 		break;
+	case POWER_SUPPLY_PROP_TEMP:
+		if (!fgu->temp_chan)
+			return -ENODATA;
+		val->intval = fgu->temp;
+		break;
+	case POWER_SUPPLY_PROP_HEALTH:
+		if (!fgu->temp_chan || !fgu->temp_limits)
+			val->intval = POWER_SUPPLY_HEALTH_UNKNOWN;
+		else if (!fgu->inhibited && fgu->temp > fgu->stop_lo &&
+			 fgu->temp < fgu->stop_hi)
+			val->intval = POWER_SUPPLY_HEALTH_GOOD;
+		else if (fgu->temp > (fgu->resume_lo + fgu->resume_hi) / 2)
+			val->intval = POWER_SUPPLY_HEALTH_OVERHEAT;
+		else
+			val->intval = POWER_SUPPLY_HEALTH_COLD;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -374,6 +463,8 @@ static const enum power_supply_property sc2723_fgu_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 	POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
+	POWER_SUPPLY_PROP_TEMP,
+	POWER_SUPPLY_PROP_HEALTH,
 };
 
 static const struct power_supply_desc sc2723_fgu_desc = {
@@ -391,6 +482,46 @@ static void sc2723_fgu_stop(void *data)
 
 	WRITE_ONCE(fgu->ready, false);
 	cancel_delayed_work_sync(&fgu->work);
+}
+
+static int sc2723_fgu_probe_temp(struct sc2723_fgu *fgu)
+{
+	struct device *dev = fgu->dev;
+	s32 lim[2];
+	int n, ret;
+
+	fgu->temp_chan = devm_iio_channel_get(dev, "bat-temp");
+	if (IS_ERR(fgu->temp_chan)) {
+		ret = PTR_ERR(fgu->temp_chan);
+		fgu->temp_chan = NULL;
+		return ret == -ENODEV ? 0 :
+		       dev_err_probe(dev, ret, "no battery temperature\n");
+	}
+
+	n = device_property_count_u32(dev, "sprd,bat-temp-table");
+	if (n < 4 || n % 2)
+		return dev_err_probe(dev, -EINVAL, "bad sprd,bat-temp-table\n");
+	fgu->temp_table = devm_kcalloc(dev, n, sizeof(u32), GFP_KERNEL);
+	if (!fgu->temp_table)
+		return -ENOMEM;
+	ret = device_property_read_u32_array(dev, "sprd,bat-temp-table",
+					     fgu->temp_table, n);
+	if (ret)
+		return ret;
+	fgu->temp_points = n / 2;
+
+	if (device_property_read_u32_array(dev, "sprd,charge-stop-celsius",
+					   (u32 *)lim, 2))
+		return 0;
+	fgu->stop_lo = lim[0] * 10;
+	fgu->stop_hi = lim[1] * 10;
+	if (device_property_read_u32_array(dev, "sprd,charge-resume-celsius",
+					   (u32 *)lim, 2))
+		return 0;
+	fgu->resume_lo = lim[0] * 10;
+	fgu->resume_hi = lim[1] * 10;
+	fgu->temp_limits = true;
+	return 0;
 }
 
 static int sc2723_fgu_probe(struct platform_device *pdev)
@@ -417,6 +548,13 @@ static int sc2723_fgu_probe(struct platform_device *pdev)
 	device_property_read_u32(dev, "sprd,calib-resistance-micro-ohms",
 				 &r_real);
 	sc2723_fgu_calibrate(fgu, r_real);
+
+	ret = sc2723_fgu_probe_temp(fgu);
+	if (ret)
+		return ret;
+	if (fgu->temp_chan && !sc2723_fgu_read_temp(fgu, &fgu->temp))
+		dev_info(dev, "battery %d.%d C\n", fgu->temp / 10,
+			 abs(fgu->temp % 10));
 
 	cfg.drv_data = fgu;
 	cfg.fwnode = dev_fwnode(dev);

@@ -7,4 +7,5 @@ obj-$(CONFIG_SPRD_ADI)		+= adi.o
 obj-$(CONFIG_SPRD_RESTART)	+= restart.o
 obj-$(CONFIG_SPRD_PMIC_EIC)	+= pmic-eic.o
 obj-$(CONFIG_SPRD_CLK_AUX0)	+= clk-aux0.o
+obj-$(CONFIG_SPRD_SC2723_ADC)	+= sc2723-adc.o
 obj-$(CONFIG_SPRD_SC2723_FGU)	+= sc2723-fgu.o
