@@ -67,7 +67,15 @@ static int sc7730_boot_secondary(unsigned int cpu, struct task_struct *idle)
 		return -ENODEV;
 
 	spin_lock(&sc7730_smp_lock);
-	writel(__pa_symbol(secondary_startup_arm), ap_ahb + AHB_JMP_ADDR(n));
+	/*
+	 * The ROM jumps with interworking, and secondary_startup_arm must be
+	 * entered in ARM state. The LLVM assembler marks it as a Thumb
+	 * function in a Thumb-2 kernel (its ENDPROC comes after the switch
+	 * to Thumb), so the address would carry bit 0 and the core would
+	 * start decoding ARM code as Thumb.
+	 */
+	writel(__pa_symbol(secondary_startup_arm) & ~1UL,
+	       ap_ahb + AHB_JMP_ADDR(n));
 	writel(readl(ap_ahb + AHB_HOLDING_PEN) | BIT(n),
 	       ap_ahb + AHB_HOLDING_PEN);
 	writel(readl(ap_ahb + AHB_CA7_RST_SET) | BIT(n),
