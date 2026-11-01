@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/aperture.h>
+#include <linux/backlight.h>
 #include <linux/clk.h>
 #include <linux/minmax.h>
 #include <linux/of_address.h>
@@ -244,6 +245,9 @@ struct simpledrm_device {
 	struct device **pwr_dom_devs;
 	struct device_link **pwr_dom_links;
 #endif
+	/* backlight, switched with the CRTC */
+	struct device_node *backlight_node;
+	struct backlight_device *backlight;
 
 	/* modesetting */
 	u32 formats[DRM_SYSFB_PLANE_NFORMATS(1)];
@@ -581,8 +585,63 @@ static const struct drm_plane_funcs simpledrm_primary_plane_funcs = {
 	.destroy = drm_plane_cleanup,
 };
 
+/*
+ * Backlight
+ *
+ * A firmware framebuffer has no way to blank the display, but switching
+ * its backlight off with the CRTC gets the same effect when user space
+ * turns the output off. Looked up lazily, so the display never waits for
+ * the backlight driver.
+ */
+
+static struct backlight_device *simpledrm_backlight(struct simpledrm_device *sdev)
+{
+	if (!IS_ENABLED(CONFIG_BACKLIGHT_CLASS_DEVICE))
+		return NULL;
+	if (!sdev->backlight && sdev->backlight_node)
+		sdev->backlight = of_find_backlight_by_node(sdev->backlight_node);
+	return sdev->backlight;
+}
+
+static void simpledrm_backlight_release(void *data)
+{
+	struct simpledrm_device *sdev = data;
+
+	if (sdev->backlight)
+		put_device(&sdev->backlight->dev);
+	of_node_put(sdev->backlight_node);
+}
+
+static int simpledrm_device_init_backlight(struct simpledrm_device *sdev)
+{
+	struct device *dev = sdev->sysfb.dev.dev;
+
+	if (!dev->of_node)
+		return 0;
+	sdev->backlight_node = of_parse_phandle(dev->of_node, "backlight", 0);
+	return devm_add_action_or_reset(dev, simpledrm_backlight_release, sdev);
+}
+
+static void simpledrm_crtc_helper_atomic_enable(struct drm_crtc *crtc,
+						struct drm_atomic_commit *state)
+{
+	struct simpledrm_device *sdev = container_of(crtc, struct simpledrm_device, crtc);
+
+	backlight_enable(simpledrm_backlight(sdev));
+}
+
+static void simpledrm_crtc_helper_atomic_disable(struct drm_crtc *crtc,
+						 struct drm_atomic_commit *state)
+{
+	struct simpledrm_device *sdev = container_of(crtc, struct simpledrm_device, crtc);
+
+	backlight_disable(simpledrm_backlight(sdev));
+}
+
 static const struct drm_crtc_helper_funcs simpledrm_crtc_helper_funcs = {
 	DRM_SYSFB_CRTC_HELPER_FUNCS,
+	.atomic_enable = simpledrm_crtc_helper_atomic_enable,
+	.atomic_disable = simpledrm_crtc_helper_atomic_disable,
 };
 
 static const struct drm_crtc_funcs simpledrm_crtc_funcs = {
@@ -652,6 +711,9 @@ static struct simpledrm_device *simpledrm_device_create(struct drm_driver *drv,
 	if (ret)
 		return ERR_PTR(ret);
 	ret = simpledrm_device_attach_genpd(sdev);
+	if (ret)
+		return ERR_PTR(ret);
+	ret = simpledrm_device_init_backlight(sdev);
 	if (ret)
 		return ERR_PTR(ret);
 
