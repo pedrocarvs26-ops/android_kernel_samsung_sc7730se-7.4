@@ -179,6 +179,14 @@ config SPRD_BOOTSTRIPES
 	  reserves that buffer and paints a white band for every boot stage
 	  it reaches, so a photo of the screen shows where boot stopped.
 
+config SPRD_USB_BRINGUP
+	bool "Power up the SC7730 USB PHY for dwc2 (bring-up hack)"
+	depends on ARCH_SPRD && USB_DWC2
+	help
+	  Switches on the SC2723 USB LDO, the USB PHY, its AHB clock and
+	  resets, then writes the PHY tune value, following the vendor
+	  kernel. Stop-gap until clock, PHY and regulator drivers exist.
+
 menuconfig ARCH_SUNPLUS
 	bool "Sunplus SoCs"
 	depends on ARCH_MULTI_V7
