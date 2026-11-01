@@ -164,6 +164,7 @@ config ARCH_SPRD
 	depends on ARCH_MULTI_V7
 	select ARM_GIC
 	select HAVE_ARM_ARCH_TIMER
+	select SPRD_SC8830_INTC
 	select SPRD_SC8830_TIMER
 	help
 	  Support for the 32-bit Spreadtrum SC7730/SC8830 ("scx35"/"shark")

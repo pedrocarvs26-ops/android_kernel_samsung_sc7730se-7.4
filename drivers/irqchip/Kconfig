@@ -435,6 +435,14 @@ config IMX_GPCV2
 	help
 	  Enables the wakeup IRQs for IMX platforms with GPCv2 block
 
+config SPRD_SC8830_INTC
+	bool
+	select IRQ_DOMAIN_HIERARCHY
+	help
+	  Wake-up gates (INTC0-3) in front of the GIC on Spreadtrum
+	  SC8830/SC7730 SoCs. Without them an idle CPU only notices
+	  interrupts at the next timer tick.
+
 config IRQ_MXS
 	def_bool y if MACH_ASM9260 || ARCH_MXS
 	select IRQ_DOMAIN
