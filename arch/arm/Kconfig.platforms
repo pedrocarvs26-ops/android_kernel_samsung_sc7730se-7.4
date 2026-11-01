@@ -198,6 +198,17 @@ config SPRD_RESTART
 	  bootloader ("reboot recovery" boots the recovery partition) and
 	  lets the PMIC watchdog reset the system, as the vendor kernel does.
 
+config SPRD_PMIC_EIC
+	bool "SC2723 PMIC EIC inputs as polled GPIOs (bring-up glue)"
+	depends on ARCH_SPRD && GPIOLIB
+	select SPRD_ADI
+	help
+	  The power and volume down keys of SC7730 tablets hang off the
+	  EIC block of the SC2723 PMIC behind the ADI bus. This exposes
+	  its 16 inputs as a GPIO chip without interrupts, for
+	  gpio-keys-polled, until the mainline sc27xx drivers support
+	  the SC2723.
+
 config SPRD_ADI
 	bool
 

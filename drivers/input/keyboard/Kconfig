@@ -532,6 +532,19 @@ config KEYBOARD_SAMSUNG
 	  To compile this driver as a module, choose M here: the
 	  module will be called samsung-keypad.
 
+config KEYBOARD_SPRD_SC8830
+	tristate "Spreadtrum SC8830/SC7730 keypad support"
+	depends on ARCH_SPRD || COMPILE_TEST
+	depends on HAS_IOMEM && OF
+	select INPUT_MATRIXKMAP
+	help
+	  Say Y here to use the keypad matrix controller of the 32-bit
+	  Spreadtrum SC8830/SC7730 ("shark") SoCs, e.g. for the Home and
+	  Volume Up keys of the Samsung Galaxy Tab E 9.6.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called sprd-sc8830-keypad.
+
 config KEYBOARD_GOLDFISH_EVENTS
 	depends on GOLDFISH || COMPILE_TEST
 	tristate "Generic Input Event device for Goldfish"
