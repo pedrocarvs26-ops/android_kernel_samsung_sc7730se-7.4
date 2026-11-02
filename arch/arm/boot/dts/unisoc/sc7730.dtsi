@@ -121,13 +121,13 @@
 	};
 
 	/*
-	 * Mali core clock: mach-sprd/pm-domains.c selects 256 MHz (TDPLL / 3)
+	 * Mali core clock: mach-sprd/pm-domains.c selects 384 MHz (TDPLL / 2)
 	 * in the GPU's own clock mux on every power-up of the GPU domain.
 	 */
 	gpu_clk: clock-gpu {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <256000000>;
+		clock-frequency = <384000000>;
 		clock-output-names = "gpu";
 	};
 
