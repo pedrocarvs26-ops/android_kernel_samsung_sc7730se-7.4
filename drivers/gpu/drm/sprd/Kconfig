@@ -10,3 +10,20 @@ config DRM_SPRD
 	  Choose this option if you have a Unisoc chipset.
 	  If M is selected the module will be called sprd_drm.
 
+
+config DRM_SPRD_DISPC
+	tristate "Spreadtrum SC7730/SC8830 display controller (takeover)"
+	depends on ARCH_SPRD || COMPILE_TEST
+	depends on DRM && OF && MMU
+	depends on BACKLIGHT_CLASS_DEVICE || !BACKLIGHT_CLASS_DEVICE
+	select APERTURE_HELPERS
+	select DRM_CLIENT_SELECTION
+	select DRM_GEM_DMA_HELPER
+	select DRM_KMS_HELPER
+	help
+	  DRM driver for the DISPC of the 32-bit Spreadtrum SC7730/SC8830
+	  ("shark") SoCs, e.g. in the Samsung Galaxy Tab E 9.6. It takes
+	  over the DSI video-mode pipeline the bootloader leaves running and
+	  only flips the scan-out buffer; DSI and the panel are not driven.
+
+	  If M is selected the module will be called sprd_dispc.
