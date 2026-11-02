@@ -102,6 +102,49 @@
 			opp-microvolt = <1050000>;
 			clock-latency-ns = <300000>;
 		};
+
+		/*
+		 * Overclocking, beyond the vendor table: MPLL in 52 MHz steps,
+		 * +25 mV each, AXI at core/4 above 1.5 GHz. Checked on one unit
+		 * (four-core sha256 load, 3 min at 1612 MHz, 74 C). Not plain
+		 * "turbo-mode": schedutil would never pick those, so user space
+		 * caps scaling_max_freq at 1300 MHz unless asked otherwise.
+		 */
+		opp-1352000000 {
+			opp-hz = /bits/ 64 <1352000000>;
+			opp-microvolt = <1075000>;
+			clock-latency-ns = <300000>;
+		};
+
+		opp-1404000000 {
+			opp-hz = /bits/ 64 <1404000000>;
+			opp-microvolt = <1100000>;
+			clock-latency-ns = <300000>;
+		};
+
+		opp-1456000000 {
+			opp-hz = /bits/ 64 <1456000000>;
+			opp-microvolt = <1125000>;
+			clock-latency-ns = <300000>;
+		};
+
+		opp-1508000000 {
+			opp-hz = /bits/ 64 <1508000000>;
+			opp-microvolt = <1150000>;
+			clock-latency-ns = <300000>;
+		};
+
+		opp-1560000000 {
+			opp-hz = /bits/ 64 <1560000000>;
+			opp-microvolt = <1175000>;
+			clock-latency-ns = <300000>;
+		};
+
+		opp-1612000000 {
+			opp-hz = /bits/ 64 <1612000000>;
+			opp-microvolt = <1200000>;
+			clock-latency-ns = <300000>;
+		};
 	};
 
 	/* SC2723 DCDC_ARM, the Cortex-A7 cluster supply (mach-sprd/sc2723-dcdc-arm.c) */
@@ -109,7 +152,7 @@
 		compatible = "sprd,sc2723-dcdc-arm";
 		regulator-name = "vddarm";
 		regulator-min-microvolt = <900000>;
-		regulator-max-microvolt = <1100000>;
+		regulator-max-microvolt = <1200000>;
 		regulator-always-on;
 		regulator-boot-on;
 	};
