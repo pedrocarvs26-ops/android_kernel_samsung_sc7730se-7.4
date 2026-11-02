@@ -24,6 +24,7 @@
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/pm_wakeirq.h>
 #include <linux/property.h>
 #include <linux/slab.h>
 
@@ -213,6 +214,15 @@ static int sc8830_kpd_probe(struct platform_device *pdev)
 	ret = devm_request_irq(dev, irq, sc8830_kpd_irq, 0, dev_name(dev), kpd);
 	if (ret)
 		return ret;
+
+	/* the matrix keeps scanning on the 32 kHz clock while we sleep */
+	if (device_property_read_bool(dev, "wakeup-source")) {
+		ret = devm_device_init_wakeup(dev);
+		if (!ret)
+			ret = devm_pm_set_wake_irq(dev, irq);
+		if (ret)
+			return ret;
+	}
 
 	ret = input_register_device(kpd->input);
 	if (ret)
