@@ -2150,6 +2150,14 @@ config SND_SOC_SSM2518
 	tristate "Analog Devices SSM2518 Class-D Amplifier"
 	depends on I2C
 
+config SND_SOC_SC2723
+	tristate "Spreadtrum SC2723 PMIC audio codec"
+	depends on SPRD_SC2723_PMIC || COMPILE_TEST
+	select REGMAP
+	help
+	  Analog audio codec of the Spreadtrum SC2723 PMIC: DACs, speaker
+	  mixer and the internal speaker amplifier.
+
 config SND_SOC_SSM2602
 	tristate
 
