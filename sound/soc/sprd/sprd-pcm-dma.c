@@ -32,11 +32,13 @@ struct sprd_pcm_dma_private {
 	struct sprd_pcm_dma_data data[SPRD_PCM_CHANNEL_MAX];
 	int hw_chan;
 	int dma_addr_offset;
+	bool interleaved;
 };
 
 static const struct snd_pcm_hardware sprd_pcm_hardware = {
 	.info = SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_MMAP_VALID |
-		SNDRV_PCM_INFO_NONINTERLEAVED | SNDRV_PCM_INFO_PAUSE |
+		SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_NONINTERLEAVED |
+		SNDRV_PCM_INFO_PAUSE |
 		SNDRV_PCM_INFO_RESUME | SNDRV_PCM_INFO_NO_PERIOD_WAKEUP,
 	.formats = SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE,
 	.period_bytes_min = 1,
@@ -216,8 +218,19 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 			return ret;
 	}
 
+	/*
+	 * Each audio channel has its own DMA channel. Non-interleaved, it
+	 * reads its own part of the buffer; interleaved, it starts at its
+	 * first sample and steps over the samples of the other channels.
+	 */
+	dma_private->interleaved = channels > 1 &&
+		(params_access(params) == SNDRV_PCM_ACCESS_RW_INTERLEAVED ||
+		 params_access(params) == SNDRV_PCM_ACCESS_MMAP_INTERLEAVED);
 	sg_num = totsize / period;
-	dma_private->dma_addr_offset = totsize / channels;
+	if (dma_private->interleaved)
+		dma_private->dma_addr_offset = params_physical_width(params) / 8;
+	else
+		dma_private->dma_addr_offset = totsize / channels;
 
 	sg = devm_kcalloc(component->dev, sg_num, sizeof(*sg), GFP_KERNEL);
 	if (!sg) {
@@ -230,6 +243,7 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 		struct dma_chan *chan = data->chan;
 		struct dma_slave_config config = { };
 		struct sprd_dma_linklist link = { };
+		struct sprd_dma_step step = { };
 		enum dma_transfer_direction dir;
 		struct scatterlist *sgt = sg;
 
@@ -248,13 +262,25 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 			dir = DMA_DEV_TO_MEM;
 		}
 
+		if (dma_private->interleaved) {
+			u32 frame = channels * dma_private->dma_addr_offset;
+
+			if (is_playback)
+				step.src_step = frame;
+			else
+				step.dst_step = frame;
+			config.peripheral_config = &step;
+			config.peripheral_size = sizeof(step);
+		}
+
 		sg_init_table(sgt, sg_num);
 		for (j = 0; j < sg_num; j++, sgt++) {
 			u32 sg_len = period / channels;
 
 			sg_dma_len(sgt) = sg_len;
 			sg_dma_address(sgt) = runtime->dma_addr +
-				i * dma_private->dma_addr_offset + sg_len * j;
+				i * dma_private->dma_addr_offset +
+				(dma_private->interleaved ? period : sg_len) * j;
 		}
 
 		/*
@@ -382,6 +408,8 @@ static snd_pcm_uframes_t sprd_pcm_pointer(struct snd_soc_component *component,
 	struct sprd_pcm_dma_private *dma_private = runtime->private_data;
 	int pointer[SPRD_PCM_CHANNEL_MAX];
 	int bytes_of_pointer = 0, sel_max = 0, i;
+	/* non-interleaved, a channel's offset is half the frame offset */
+	int shift = dma_private->interleaved ? 0 : 1;
 	snd_pcm_uframes_t x;
 	struct dma_tx_state state;
 	enum dma_status status;
@@ -414,10 +442,10 @@ static snd_pcm_uframes_t sprd_pcm_pointer(struct snd_soc_component *component,
 
 			if (sel_max)
 				bytes_of_pointer =
-					max(pointer[i], pointer[i - 1]) << 1;
+					max(pointer[i], pointer[i - 1]) << shift;
 			else
 				bytes_of_pointer =
-					min(pointer[i], pointer[i - 1]) << 1;
+					min(pointer[i], pointer[i - 1]) << shift;
 		}
 
 		data->pre_pointer = pointer[i];
