@@ -508,6 +508,15 @@ config SPRD_THERMAL
 	  Support for the Spreadtrum thermal sensor driver in the Linux thermal
 	  framework.
 
+config SPRD_SC7730_THERMAL
+	tristate "Temperature sensor on Spreadtrum SC7730/SC8830"
+	depends on ARCH_SPRD || COMPILE_TEST
+	depends on OF
+	help
+	  Support for the on-die temperature sensor of the 32-bit Spreadtrum
+	  SC7730/SC8830 ("shark") SoCs, polled through a thermal zone from
+	  the device tree.
+
 config KHADAS_MCU_FAN_THERMAL
 	tristate "Khadas MCU controller FAN cooling support"
 	depends on OF
