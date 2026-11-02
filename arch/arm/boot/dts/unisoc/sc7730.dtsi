@@ -348,7 +348,7 @@
 		 * request IDs: VB_DA0/1 = 29/30, VB_AD0-3 = 31-34.
 		 */
 		ap_dma: dma-controller@20100000 {
-			compatible = "sprd,sc7730-dma", "sprd,sc9860-dma";
+			compatible = "sprd,sc7730-dma";
 			reg = <0x20100000 0x4000>;
 			interrupts = <GIC_SPI 50 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&ap_ahb_gates 5>;
@@ -393,7 +393,7 @@
 		 * (AON_APB EB0 bit 27) is switched with the power domain.
 		 */
 		gpu: gpu@60000000 {
-			compatible = "arm,mali-400";
+			compatible = "sprd,sc7730-mali", "arm,mali-400";
 			reg = <0x60000000 0x10000>;
 			interrupts = <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>,
@@ -487,6 +487,8 @@
 			compatible = "snps,dwc2";
 			reg = <0x20200000 0x40000>;
 			interrupts = <GIC_SPI 55 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ap_ahb_gates 4>;
+			clock-names = "otg";
 			dr_mode = "peripheral";
 			usb-role-switch;
 			role-switch-default-mode = "peripheral";
@@ -640,7 +642,7 @@
 			      <0x402d0038 0x10>;
 			reg-names = "pwm", "aon-apb", "clk-sel";
 			clocks = <&ext_26m>;
-			#pwm-cells = <2>;
+			#pwm-cells = <3>;
 			status = "disabled";
 		};
 
@@ -649,8 +651,8 @@
 			compatible = "sprd,sc9836-uart";
 			reg = <0x70000000 0x100>;
 			interrupts = <GIC_SPI 2 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&ext_26m>, <&ap_apb_gates 13>;
-			clock-names = "uart", "enable";
+			clocks = <&ap_apb_gates 13>, <&ext_26m>;
+			clock-names = "enable", "uart";
 			status = "disabled";
 		};
 
@@ -658,8 +660,8 @@
 			compatible = "sprd,sc9836-uart";
 			reg = <0x70100000 0x100>;
 			interrupts = <GIC_SPI 3 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&ext_26m>;
-			clock-names = "uart";
+			clocks = <&ap_apb_gates 14>, <&ext_26m>;
+			clock-names = "enable", "uart";
 			status = "disabled";
 		};
 	};
