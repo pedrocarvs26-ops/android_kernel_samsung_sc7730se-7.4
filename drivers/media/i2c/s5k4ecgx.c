@@ -49,6 +49,11 @@
 #define S5K_FW_REVISION		0x700001a6
 #define S5K_G_ENABLE_PREV	0x7000023e
 #define S5K_G_ENABLE_PREV_CHG	0x70000240
+/* user adjustments on top of the tuning, signed, 0 = unchanged */
+#define S5K_USER_BRIGHTNESS	0x7000022c
+#define S5K_USER_CONTRAST	0x7000022e
+#define S5K_USER_SATURATION	0x70000230
+#define S5K_SATURATION_DEF	0
 
 #define S5K_MCLK_HZ		24000000
 #define S5K_LANES		2
@@ -363,6 +368,10 @@ static int s5k_enable_streams(struct v4l2_subdev *sd,
 		if (ret)
 			return ret;
 		s5k->loaded = s5k->mode;
+		/* the init resets the adjustments too */
+		ret = __v4l2_ctrl_handler_setup(&s5k->ctrls);
+		if (ret)
+			return ret;
 	}
 	return s5k_preview(s5k, true);
 }
@@ -376,8 +385,34 @@ static int s5k_disable_streams(struct v4l2_subdev *sd,
 
 static int s5k_s_ctrl(struct v4l2_ctrl *ctrl)
 {
-	/* only read-only controls */
-	return 0;
+	struct s5k4ecgx *s5k = container_of(ctrl->handler, struct s5k4ecgx,
+					    ctrls);
+	int ret = 0;
+	u32 addr;
+
+	switch (ctrl->id) {
+	case V4L2_CID_BRIGHTNESS:
+		addr = S5K_USER_BRIGHTNESS;
+		break;
+	case V4L2_CID_CONTRAST:
+		addr = S5K_USER_CONTRAST;
+		break;
+	case V4L2_CID_SATURATION:
+		addr = S5K_USER_SATURATION;
+		break;
+	default:
+		/* link frequency and pixel rate follow the mode */
+		return 0;
+	}
+
+	/* without the tables in the ISP: written after loading them */
+	if (!s5k->loaded)
+		return 0;
+
+	cci_write(s5k->regmap, S5K_REG_AHB_PAGE, S5K_AHB_PAGE, &ret);
+	if (!ret)
+		ret = s5k_write(s5k, addr, ctrl->val);
+	return ret;
 }
 
 static const struct v4l2_ctrl_ops s5k_ctrl_ops = {
@@ -416,7 +451,13 @@ static int s5k_init_controls(struct s5k4ecgx *s5k)
 	struct v4l2_ctrl *ctrl;
 	int ret;
 
-	v4l2_ctrl_handler_init(hdl, 4);
+	v4l2_ctrl_handler_init(hdl, 7);
+	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_BRIGHTNESS,
+			  -208, 127, 1, 0);
+	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_CONTRAST,
+			  -127, 127, 1, 0);
+	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_SATURATION,
+			  -127, 127, 1, S5K_SATURATION_DEF);
 	ctrl = v4l2_ctrl_new_int_menu(hdl, &s5k_ctrl_ops, V4L2_CID_LINK_FREQ,
 				      0, 0, s5k_link_freqs);
 	if (ctrl)
