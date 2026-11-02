@@ -26,13 +26,23 @@
  * WFI for a wakeup interrupt. DDR, the GIC and the counter stay powered.
  * The vendor's deep sleep (DDR self-refresh, CA7 power-down, resume from
  * IRAM) is not there yet.
+ *
+ * The CPU OPP table goes beyond the vendor's 1300 MHz (overclocking steps
+ * checked on a single unit), so every new cpufreq policy gets a maximum
+ * of 1300 MHz before its governor starts. User space can move it through
+ * /sys/module/sc7730/parameters/cpu_max_khz.
  */
 
 #include <linux/bits.h>
 #include <linux/clk-provider.h>
 #include <linux/clocksource.h>
+#include <linux/cpufreq.h>
 #include <linux/init.h>
 #include <linux/io.h>
+#include <linux/moduleparam.h>
+#include <linux/mutex.h>
+#include <linux/of.h>
+#include <linux/pm_qos.h>
 #include <linux/printk.h>
 #include <linux/suspend.h>
 
@@ -131,6 +141,64 @@ static void __init sc7730_init_late(void)
 }
 #else
 #define sc7730_init_late	NULL
+#endif
+
+#ifdef CONFIG_CPU_FREQ
+static unsigned int cpu_max_khz = 1300000;
+static struct freq_qos_request cpu_max_req;
+static struct cpufreq_policy *cpu_max_policy;
+static DEFINE_MUTEX(cpu_max_lock);
+
+static int sc7730_cpu_max_set(const char *val, const struct kernel_param *kp)
+{
+	int ret;
+
+	mutex_lock(&cpu_max_lock);
+	ret = param_set_uint(val, kp);
+	if (!ret && cpu_max_policy)
+		ret = freq_qos_update_request(&cpu_max_req, cpu_max_khz);
+	mutex_unlock(&cpu_max_lock);
+	return ret < 0 ? ret : 0;
+}
+
+static const struct kernel_param_ops sc7730_cpu_max_ops = {
+	.set = sc7730_cpu_max_set,
+	.get = param_get_uint,
+};
+module_param_cb(cpu_max_khz, &sc7730_cpu_max_ops, &cpu_max_khz, 0644);
+MODULE_PARM_DESC(cpu_max_khz, "CPU frequency limit in kHz (vendor maximum 1300000)");
+
+static int sc7730_cpufreq_notify(struct notifier_block *nb,
+				 unsigned long event, void *data)
+{
+	struct cpufreq_policy *policy = data;
+
+	mutex_lock(&cpu_max_lock);
+	if (event == CPUFREQ_CREATE_POLICY && !cpu_max_policy) {
+		if (freq_qos_add_request(&policy->constraints, &cpu_max_req,
+					 FREQ_QOS_MAX, cpu_max_khz) >= 0)
+			cpu_max_policy = policy;
+	} else if (event == CPUFREQ_REMOVE_POLICY && policy == cpu_max_policy) {
+		freq_qos_remove_request(&cpu_max_req);
+		cpu_max_policy = NULL;
+	}
+	mutex_unlock(&cpu_max_lock);
+	return NOTIFY_OK;
+}
+
+static struct notifier_block sc7730_cpufreq_nb = {
+	.notifier_call = sc7730_cpufreq_notify,
+};
+
+/* before cpufreq-dt probes at device_initcall */
+static int __init sc7730_cpufreq_limit_init(void)
+{
+	if (!of_machine_is_compatible("sprd,sc7730"))
+		return 0;
+	return cpufreq_register_notifier(&sc7730_cpufreq_nb,
+					 CPUFREQ_POLICY_NOTIFIER);
+}
+arch_initcall(sc7730_cpufreq_limit_init);
 #endif
 
 static const char *const sc7730_dt_compat[] __initconst = {
