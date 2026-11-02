@@ -7,11 +7,19 @@
  * D-PHY, initialises the panel and scans out its splash buffer through the
  * OSD layer in DPI (video) mode. This driver keeps all of that as it is and
  * only moves the OSD base address to its own buffers, as the vendor kernel
- * does when it takes over the splash screen. It never stops DISPC and never
- * touches clocks, resets, DSI or the panel: DISPC cannot be restarted
- * without a DSI and panel re-init, which needs drivers that do not exist
- * yet. Disabling the CRTC therefore switches the backlight off and points
- * the layer at a black buffer, so freed memory is never scanned out.
+ * does when it takes over the splash screen. Apart from the panel power-off
+ * below it never stops DISPC, and it never touches clocks, resets or the
+ * DSI configuration. Disabling the CRTC switches the backlight off and
+ * points the layer at a black buffer, so freed memory is never scanned out.
+ *
+ * With panel_power_off set (the default) it also stops DISPC (without a
+ * reset, as the vendor's ESD path does), sends the NT51017 its sleep-in
+ * packet over the DSI host in LP command mode and cuts the panel supplies.
+ * panel_power_off=0 leaves DISPC and the panel running. Enabling powers
+ * the panel up the way the bootloader does, which needs no init commands,
+ * and restarts video mode and DISPC. The DSI host and D-PHY keep their
+ * configuration throughout. The panel does not come back from sleep-in
+ * with a sleep-out (0x11) packet alone, so the supplies are part of it.
  *
  * Layer registers are double-buffered: setting DPI_CTRL bit 5 requests the
  * transfer to the active copies at the next VSYNC, which raises
@@ -30,9 +38,12 @@
 #include <linux/bitfield.h>
 #include <linux/bits.h>
 #include <linux/completion.h>
+#include <linux/delay.h>
 #include <linux/dma-mapping.h>
+#include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -87,6 +98,7 @@
 #define DISPC_DPI_V_TIMING	0x88
 #define DISPC_DPI_STS1		0x90
 #define  DPI_STS1_FRAME		GENMASK(15, 0)	/* +1 per frame */
+#define  DPI_STS1_BUSY		BIT(16)
 #define  DPI_SYNC		GENMASK(7, 0)
 #define  DPI_BP			GENMASK(19, 8)
 #define  DPI_FP			GENMASK(31, 20)
@@ -104,6 +116,39 @@
 #define AP_CLK_DISPC_DPI_CFG	0x34
 #define  DPI_CLK_SEL		GENMASK(1, 0)
 #define  DPI_CLK_DIV		GENMASK(15, 8)
+
+/* DesignWare MIPI DSI host 1.21a, as the bootloader leaves it in video mode */
+#define DSI_PCKHDL_CFG		0x2c
+#define  PCKHDL_VIDEO		0x0f		/* EoTp tx/rx, BTA, ECC rx */
+#define  PCKHDL_READ		0x0c		/* BTA, ECC rx: as sboot's ID read */
+#define DSI_MODE_CFG		0x34
+#define  MODE_CMD		BIT(0)
+#define DSI_CMD_MODE_CFG	0x68
+#define  CMD_MODE_ALL_LP	0x010f7f00
+#define DSI_GEN_HDR		0x6c
+#define  GEN_DCS_SHORT_WRITE_1	0x15		/* vendor type for its lists */
+#define  GEN_DCS_READ		0x06
+#define DSI_GEN_PLD_DATA	0x70
+#define DSI_CMD_PKT_STATUS	0x74
+#define  GEN_CMD_EMPTY		BIT(0)
+#define  GEN_CMD_FULL		BIT(1)
+#define  GEN_PLD_W_EMPTY	BIT(2)
+#define  GEN_PLD_R_EMPTY	BIT(4)
+#define  GEN_RD_CMD_BUSY	BIT(6)
+#define DSI_LPCLK_CTRL		0x94
+#define  LPCLK_HS		BIT(0)
+#define DSI_INT_ST0		0xbc
+#define DSI_INT_ST1		0xc0
+
+#define NT51017_ID_REG		0x80
+#define  NT51017_ID		0x03
+#define NT51017_STATUS_REG	0x0a		/* 0x11 after power-up */
+#define NT51017_SLEEP_IN	0x10
+
+static bool panel_power_off = true;
+module_param(panel_power_off, bool, 0644);
+MODULE_PARM_DESC(panel_power_off,
+		 "Stop DISPC and power the panel off while the CRTC is off (default: on)");
 
 #define FLIP_TIMEOUT_MS		100
 
@@ -126,6 +171,9 @@ struct sprd_dispc {
 	struct drm_display_mode mode;
 
 	void __iomem *base;
+	void __iomem *dsi;
+	struct gpio_descs *panel_power;
+	bool panel_off;
 	struct backlight_device *backlight;
 
 	/* never-freed black buffer to scan out while the CRTC is off */
@@ -330,8 +378,9 @@ static void sprd_dispc_crtc_atomic_flush(struct drm_crtc *crtc,
 }
 
 /*
- * An enabled CRTC always needs a buffer to show (DISPC keeps scanning
- * out); disabling all of it, as suspend and shutdown do, needs none.
+ * An enabled CRTC always needs a buffer to show (with panel_power_off
+ * unset DISPC keeps scanning out); disabling all of it, as suspend and
+ * shutdown do, needs none.
  */
 static int sprd_dispc_crtc_atomic_check(struct drm_crtc *crtc,
 					struct drm_atomic_commit *state)
@@ -343,13 +392,141 @@ static int sprd_dispc_crtc_atomic_check(struct drm_crtc *crtc,
 	return drm_atomic_helper_check_crtc_primary_plane(crtc_state);
 }
 
+static int sprd_dsi_wait(struct sprd_dispc *d, u32 mask, u32 want)
+{
+	u32 sts;
+	int ret;
+
+	ret = readl_poll_timeout(d->dsi + DSI_CMD_PKT_STATUS, sts,
+				 (sts & mask) == want, 100, 20000);
+	if (ret)
+		drm_warn(&d->drm, "DSI command timeout, status %08x INT_ST1 %08x\n",
+			 sts, readl(d->dsi + DSI_INT_ST1));
+	return ret;
+}
+
+/* LP command mode with the HS clock off, vendor set_lp_mode */
+static void sprd_dsi_cmd_mode(struct sprd_dispc *d)
+{
+	writel(MODE_CMD, d->dsi + DSI_MODE_CFG);
+	writel(CMD_MODE_ALL_LP, d->dsi + DSI_CMD_MODE_CFG);
+	writel(0, d->dsi + DSI_LPCLK_CTRL);
+}
+
+/* back to video, vendor order (no PWR_UP toggle on 1.21a) */
+static void sprd_dsi_video_mode(struct sprd_dispc *d)
+{
+	writel(PCKHDL_VIDEO, d->dsi + DSI_PCKHDL_CFG);
+	writel(LPCLK_HS, d->dsi + DSI_LPCLK_CTRL);
+	writel(0, d->dsi + DSI_MODE_CFG);
+	readl(d->dsi + DSI_INT_ST0);
+	readl(d->dsi + DSI_INT_ST1);
+}
+
+static int sprd_dsi_write(struct sprd_dispc *d, u8 reg, u8 val)
+{
+	int ret = sprd_dsi_wait(d, GEN_CMD_FULL, 0);
+
+	if (ret)
+		return ret;
+	readl(d->dsi + DSI_INT_ST0);
+	readl(d->dsi + DSI_INT_ST1);
+	writel(val << 16 | reg << 8 | GEN_DCS_SHORT_WRITE_1,
+	       d->dsi + DSI_GEN_HDR);
+	return sprd_dsi_wait(d, GEN_CMD_EMPTY | GEN_PLD_W_EMPTY,
+			     GEN_CMD_EMPTY | GEN_PLD_W_EMPTY);
+}
+
+static int sprd_dsi_read(struct sprd_dispc *d, u8 reg)
+{
+	int ret;
+
+	writel(PCKHDL_READ, d->dsi + DSI_PCKHDL_CFG);
+	ret = sprd_dsi_wait(d, GEN_CMD_FULL, 0);
+	if (ret)
+		return ret;
+	writel(reg << 8 | GEN_DCS_READ, d->dsi + DSI_GEN_HDR);
+	ret = sprd_dsi_wait(d, GEN_RD_CMD_BUSY | GEN_PLD_R_EMPTY, 0);
+	if (ret)
+		return ret;
+	return readl(d->dsi + DSI_GEN_PLD_DATA) & 0xff;
+}
+
+/* without a reset, as the vendor's ESD path (dispc_stop_for_feature) */
+static void sprd_dispc_stop(struct sprd_dispc *d)
+{
+	u32 sts;
+
+	writel(readl(d->base + DISPC_DPI_CTRL) | DPI_SW_UPDATE_ONLY,
+	       d->base + DISPC_DPI_CTRL);
+	writel(readl(d->base + DISPC_CTRL) & ~CTRL_RUN, d->base + DISPC_CTRL);
+	if (readl_poll_timeout(d->base + DISPC_DPI_STS1, sts,
+			       !(sts & DPI_STS1_BUSY), 100, 50000))
+		drm_warn(&d->drm, "DISPC still busy, DPI_STS1 %08x\n", sts);
+	udelay(25);
+}
+
+/* first-frame path of the vendor dispc_run; no IMG trick needed without a reset */
+static void sprd_dispc_run(struct sprd_dispc *d)
+{
+	writel(readl(d->base + DISPC_DPI_CTRL) | DPI_REG_UPDATE,
+	       d->base + DISPC_DPI_CTRL);
+	udelay(30);
+	writel(readl(d->base + DISPC_DPI_CTRL) & ~DPI_SW_UPDATE_ONLY,
+	       d->base + DISPC_DPI_CTRL);
+	writel(readl(d->base + DISPC_CTRL) | CTRL_RUN, d->base + DISPC_CTRL);
+}
+
+static void sprd_dispc_panel_off(struct sprd_dispc *d)
+{
+	int i;
+
+	sprd_dispc_stop(d);
+	sprd_dsi_cmd_mode(d);
+	sprd_dsi_write(d, NT51017_SLEEP_IN, 0);
+	msleep(160);
+	for (i = d->panel_power->ndescs - 1; i >= 0; i--)
+		gpiod_set_value_cansleep(d->panel_power->desc[i], 0);
+	msleep(20);
+	d->panel_off = true;
+}
+
+/* the bootloader's power-up: supplies, LP-11 for 40 ms, video */
+static void sprd_dispc_panel_on(struct sprd_dispc *d)
+{
+	int i, id, status;
+
+	for (i = 0; i < d->panel_power->ndescs; i++) {
+		gpiod_set_value_cansleep(d->panel_power->desc[i], 1);
+		if (!i)
+			usleep_range(1000, 2000);
+	}
+	msleep(40);
+	id = sprd_dsi_read(d, NT51017_ID_REG);
+	status = sprd_dsi_read(d, NT51017_STATUS_REG);
+	if (id != NT51017_ID)
+		drm_warn(&d->drm, "panel ID %d after power-up, status %d\n",
+			 id, status);
+	else
+		drm_dbg_kms(&d->drm, "panel on, status %#x\n", status);
+	sprd_dsi_video_mode(d);
+	sprd_dispc_run(d);
+	d->panel_off = false;
+}
+
 /* runs before the planes (commit_tail_rpm), so vblank is on for the flip */
 static void sprd_dispc_crtc_atomic_enable(struct drm_crtc *crtc,
 					  struct drm_atomic_commit *state)
 {
 	struct sprd_dispc *d = to_sprd_dispc(crtc->dev);
+	bool powered_up = d->panel_off;
 
+	if (powered_up)
+		sprd_dispc_panel_on(d);
 	drm_crtc_vblank_on(crtc);
+	/* two frames of video before the light, as the vendor waits */
+	if (powered_up)
+		msleep(43);
 	backlight_enable(d->backlight);
 }
 
@@ -369,6 +546,9 @@ static void sprd_dispc_crtc_atomic_disable(struct drm_crtc *crtc,
 		crtc->state->event = NULL;
 	}
 	spin_unlock_irq(&crtc->dev->event_lock);
+
+	if (panel_power_off && d->dsi && d->panel_power)
+		sprd_dispc_panel_off(d);
 }
 
 /* the DPI block counts frames in hardware */
@@ -589,6 +769,14 @@ static int sprd_dispc_probe(struct platform_device *pdev)
 	if (IS_ERR(d->backlight))
 		return PTR_ERR(d->backlight);
 
+	/* optional: switching the panel off needs the DSI host and supplies */
+	d->dsi = sprd_dispc_map(pdev, "dsi");
+	d->panel_power = devm_gpiod_get_array_optional(dev, "panel-power",
+						       GPIOD_OUT_HIGH);
+	if (IS_ERR(d->panel_power))
+		return dev_err_probe(dev, PTR_ERR(d->panel_power),
+				     "panel supplies\n");
+
 	d->black = dmam_alloc_coherent(dev, d->fb_size, &d->black_dma,
 				       GFP_KERNEL);
 	if (!d->black)
@@ -686,6 +874,19 @@ static void sprd_dispc_shutdown(struct platform_device *pdev)
 	drm_atomic_helper_shutdown(platform_get_drvdata(pdev));
 }
 
+static int sprd_dispc_suspend(struct device *dev)
+{
+	return drm_mode_config_helper_suspend(dev_get_drvdata(dev));
+}
+
+static int sprd_dispc_resume(struct device *dev)
+{
+	return drm_mode_config_helper_resume(dev_get_drvdata(dev));
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(sprd_dispc_pm_ops, sprd_dispc_suspend,
+				sprd_dispc_resume);
+
 static const struct of_device_id sprd_dispc_of_match[] = {
 	{ .compatible = "sprd,sc7730-dispc" },
 	{ }
@@ -699,6 +900,7 @@ static struct platform_driver sprd_dispc_platform_driver = {
 	.driver = {
 		.name = "sprd-dispc",
 		.of_match_table = sprd_dispc_of_match,
+		.pm = pm_sleep_ptr(&sprd_dispc_pm_ops),
 	},
 };
 module_platform_driver(sprd_dispc_platform_driver);
