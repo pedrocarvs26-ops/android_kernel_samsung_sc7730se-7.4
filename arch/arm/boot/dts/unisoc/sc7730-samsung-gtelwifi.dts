@@ -354,6 +354,10 @@
 	};
 };
 
+&gpu {
+	status = "okay";
+};
+
 &keypad {
 	keypad,num-rows = <1>;
 	keypad,num-columns = <3>;
