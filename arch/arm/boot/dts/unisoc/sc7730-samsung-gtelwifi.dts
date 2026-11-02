@@ -333,6 +333,17 @@
 		regulator-max-microvolt = <1800000>;
 	};
 
+	/* external 1.2 V core supply of the rear camera */
+	cam_dvdd: regulator-cam-dvdd {
+		compatible = "regulator-fixed";
+		regulator-name = "cam_dvdd";
+		regulator-min-microvolt = <1200000>;
+		regulator-max-microvolt = <1200000>;
+		gpio = <&gpio 193 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		startup-delay-us = <1000>;
+	};
+
 	backlight: backlight {
 		compatible = "pwm-backlight";
 		pwms = <&pwm 3 49039>;
@@ -352,9 +363,11 @@
 };
 
 /*
- * Camera sensors: rear S5K4ECGX @ 0x56 (no driver yet), front SR200PC20M
- * @ 0x20 on D-PHY C. The front does not need the external 1.2 V DVDD
- * (GPIO 193) the vendor pulses.
+ * Camera sensors: rear S5K4ECGX @ 0x56 on D-PHY A, front SR200PC20M @ 0x20
+ * on D-PHY C. Only the rear needs the external 1.2 V DVDD (GPIO 193); the
+ * vendor also pulses it for the front, which works without. Rotations
+ * relative to the portrait panel, from test shots: the scene's top lands
+ * on the left of the rear image and on the right of the front image.
  */
 &i2c0 {
 	status = "okay";
@@ -368,6 +381,7 @@
 		reset-gpios = <&gpio 238 GPIO_ACTIVE_LOW>;
 		powerdown-gpios = <&gpio 187 GPIO_ACTIVE_LOW>;
 		orientation = <0>;
+		rotation = <90>;
 
 		port {
 			front_camera_out: endpoint {
@@ -376,10 +390,37 @@
 			};
 		};
 	};
+
+	camera@56 {
+		compatible = "samsung,s5k4ecgx";
+		reg = <0x56>;
+		clocks = <&dcam>;
+		avdd-supply = <&vddcama>;
+		dovdd-supply = <&vddcamio>;
+		dvdd-supply = <&cam_dvdd>;
+		reset-gpios = <&gpio 186 GPIO_ACTIVE_LOW>;
+		powerdown-gpios = <&gpio 188 GPIO_ACTIVE_LOW>;
+		orientation = <1>;
+		rotation = <270>;
+
+		port {
+			rear_camera_out: endpoint {
+				remote-endpoint = <&dcam_rear_in>;
+				data-lanes = <1 2>;
+			};
+		};
+	};
 };
 
 &dcam {
 	status = "okay";
+};
+
+&dcam_phy_a {
+	dcam_rear_in: endpoint {
+		remote-endpoint = <&rear_camera_out>;
+		data-lanes = <1 2>;
+	};
 };
 
 &dcam_phy_c {
