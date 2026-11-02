@@ -518,6 +518,13 @@
  */
 &dispc {
 	backlight = <&backlight>;
+	/*
+	 * NT51017 supplies (lcd_3v3_en, cabc_01_en, cabc_02_en), switched on
+	 * in this order and off in reverse, as the vendor gen-panel does
+	 */
+	panel-power-gpios = <&gpio 152 GPIO_ACTIVE_HIGH>,
+			    <&gpio 232 GPIO_ACTIVE_HIGH>,
+			    <&gpio 233 GPIO_ACTIVE_HIGH>;
 	width-mm = <129>;
 	height-mm = <206>;
 	status = "okay";

@@ -381,9 +381,9 @@
 			compatible = "sprd,sc7730-dispc";
 			reg = <0x20800000 0x1000>, <0x20d00000 0x4>,
 			      <0x402e0000 0x8>, <0x71300000 0x4>,
-			      <0x71200000 0x40>;
+			      <0x71200000 0x40>, <0x21800000 0x1000>;
 			reg-names = "dispc", "ap-ahb", "aon-apb", "ap-apb",
-				    "ap-clk";
+				    "ap-clk", "dsi";
 			interrupts = <GIC_SPI 46 IRQ_TYPE_LEVEL_HIGH>;
 			status = "disabled";
 		};
