@@ -755,6 +755,22 @@ static int dcam_enum_fmt(struct file *file, void *priv,
 	return 0;
 }
 
+static int dcam_enum_framesizes(struct file *file, void *priv,
+				struct v4l2_frmsizeenum *fsize)
+{
+	if (fsize->index || fsize->pixel_format != V4L2_PIX_FMT_NV16)
+		return -EINVAL;
+	/* as dcam_fill_fmt() aligns them */
+	fsize->type = V4L2_FRMSIZE_TYPE_STEPWISE;
+	fsize->stepwise.min_width = 16;
+	fsize->stepwise.max_width = DCAM_MAX_WIDTH;
+	fsize->stepwise.step_width = 4;
+	fsize->stepwise.min_height = 16;
+	fsize->stepwise.max_height = DCAM_MAX_HEIGHT;
+	fsize->stepwise.step_height = 2;
+	return 0;
+}
+
 static int dcam_g_fmt(struct file *file, void *priv, struct v4l2_format *f)
 {
 	struct dcam *d = video_drvdata(file);
@@ -804,6 +820,7 @@ static int dcam_s_input(struct file *file, void *priv, unsigned int i)
 static const struct v4l2_ioctl_ops dcam_ioctl_ops = {
 	.vidioc_querycap = dcam_querycap,
 	.vidioc_enum_fmt_vid_cap = dcam_enum_fmt,
+	.vidioc_enum_framesizes = dcam_enum_framesizes,
 	.vidioc_g_fmt_vid_cap = dcam_g_fmt,
 	.vidioc_try_fmt_vid_cap = dcam_try_fmt,
 	.vidioc_s_fmt_vid_cap = dcam_s_fmt,
