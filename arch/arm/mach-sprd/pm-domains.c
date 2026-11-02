@@ -14,11 +14,12 @@
  *
  * The GPU's core clock mux lives inside the domain (GPU_APB CLK_CTRL at
  * 0x60100004, SEL bits 2:0, DIV bits 5:4) and loses its setting with it,
- * so it is programmed here on every power-up: 256 MHz, TDPLL / 3, which is
- * also the reset value. The vendor's faster sources hang off the modem
- * PLLs (312 MHz = CPLL / 2, 460.8 MHz = WPLL / 2) that do not run for the
- * AP here: selecting 312 MHz hung the GPU bus. A clock driver would read
- * the mux while the domain is off.
+ * so it is programmed here on every power-up: 384 MHz, TDPLL / 2, one of
+ * the vendor's own operating points (the reset value is 256 MHz, TDPLL / 3).
+ * The vendor's other fast sources hang off the modem PLLs (312 MHz =
+ * CPLL / 2, 460.8 MHz = WPLL / 2) that do not run for the AP here:
+ * selecting 312 MHz hung the GPU bus. A clock driver would read the mux
+ * while the domain is off.
  *
  * Bring-up glue until there is a power domain driver for this SoC.
  */
@@ -45,7 +46,7 @@
 #define GPU_APB_CLK_CTRL	0x04
 #define GPU_CLK_SEL		GENMASK(2, 0)
 #define GPU_CLK_DIV		GENMASK(5, 4)
-#define GPU_CLK_SEL_256M	2
+#define GPU_CLK_SEL_384M	5
 
 enum { SC7730_PD_GPU, SC7730_PD_MM, SC7730_NR_PDS };
 
@@ -110,7 +111,7 @@ static int sc7730_pd_power_on(struct generic_pm_domain *genpd)
 	sc7730_pd_rmw(pds->aon + AON_APB_EB0, 0, d->eb);
 
 	if (d == &sc7730_pd_data[SC7730_PD_GPU] && pds->gpu_apb)
-		writel(FIELD_PREP(GPU_CLK_SEL, GPU_CLK_SEL_256M) |
+		writel(FIELD_PREP(GPU_CLK_SEL, GPU_CLK_SEL_384M) |
 		       FIELD_PREP(GPU_CLK_DIV, 0),
 		       pds->gpu_apb + GPU_APB_CLK_CTRL);
 	return 0;
