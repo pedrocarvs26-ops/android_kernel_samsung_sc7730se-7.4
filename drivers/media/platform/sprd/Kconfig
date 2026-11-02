@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+comment "Spreadtrum media platform drivers"
+
+config VIDEO_SC7730_DCAM
+	tristate "Spreadtrum SC7730 camera capture (DCAM + CSI-2)"
+	depends on V4L_PLATFORM_DRIVERS
+	depends on VIDEO_DEV && OF && COMMON_CLK
+	depends on ARCH_SPRD || COMPILE_TEST
+	depends on PM
+	select MEDIA_CONTROLLER
+	select V4L2_FWNODE
+	select VIDEO_V4L2_SUBDEV_API
+	select VIDEOBUF2_DMA_CONTIG
+	help
+	  Camera capture on the Spreadtrum SC7730/SC8830: the CSI-2 host
+	  with its D-PHYs and the DCAM capture engine, for sensors with an
+	  embedded ISP that deliver YUV.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called sc7730-dcam.
