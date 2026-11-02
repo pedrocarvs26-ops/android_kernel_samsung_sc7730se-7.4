@@ -651,11 +651,11 @@ static void sprd_dma_free_chan_resources(struct dma_chan *chan)
 		cur_vd = &schan->cur_desc->vd;
 
 	sprd_dma_stop(schan);
+	if (cur_vd)
+		vchan_terminate_vdesc(cur_vd);
 	spin_unlock_irqrestore(&schan->vc.lock, flags);
 
-	if (cur_vd)
-		sprd_dma_free_desc(cur_vd);
-
+	vchan_synchronize(&schan->vc);
 	vchan_free_chan_resources(&schan->vc);
 	pm_runtime_put(chan->device->dev);
 }
@@ -1105,14 +1105,24 @@ static int sprd_dma_terminate_all(struct dma_chan *chan)
 
 	sprd_dma_stop(schan);
 
+	/*
+	 * A link-list descriptor is cyclic: vc->cyclic may still point to
+	 * it for the completion tasklet, which vchan_terminate_vdesc() clears.
+	 */
+	if (cur_vd)
+		vchan_terminate_vdesc(cur_vd);
 	vchan_get_all_descriptors(&schan->vc, &head);
 	spin_unlock_irqrestore(&schan->vc.lock, flags);
 
-	if (cur_vd)
-		sprd_dma_free_desc(cur_vd);
-
 	vchan_dma_desc_free_list(&schan->vc, &head);
 	return 0;
+}
+
+static void sprd_dma_synchronize(struct dma_chan *chan)
+{
+	struct sprd_dma_chn *schan = to_sprd_dma_chan(chan);
+
+	vchan_synchronize(&schan->vc);
 }
 
 static void sprd_dma_free_desc(struct virt_dma_desc *vd)
@@ -1235,6 +1245,7 @@ static int sprd_dma_probe(struct platform_device *pdev)
 	sdev->dma_dev.device_pause = sprd_dma_pause;
 	sdev->dma_dev.device_resume = sprd_dma_resume;
 	sdev->dma_dev.device_terminate_all = sprd_dma_terminate_all;
+	sdev->dma_dev.device_synchronize = sprd_dma_synchronize;
 
 	for (i = 0; i < chn_count; i++) {
 		dma_chn = &sdev->channels[i];
