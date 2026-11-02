@@ -846,6 +846,22 @@ config VIDEO_S5K3M5
 	  To compile this driver as a module, choose M here: the
 	  module will be called s5k3m5.
 
+config VIDEO_S5K4ECGX
+	tristate "Samsung S5K4ECGX sensor support"
+	depends on OF && GPIOLIB && VIDEO_DEV
+	select FW_LOADER
+	select MEDIA_CONTROLLER
+	select V4L2_CCI_I2C
+	select V4L2_FWNODE
+	select VIDEO_V4L2_SUBDEV_API
+	help
+	  This is a V4L2 sensor driver for the Samsung S5K4ECGX, a 5 MP
+	  sensor with an embedded image signal processor and a two-lane
+	  MIPI CSI-2 output. Its register tables are loaded as firmware.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called s5k4ecgx.
+
 config VIDEO_S5K5BAF
 	tristate "Samsung S5K5BAF sensor support"
 	help
