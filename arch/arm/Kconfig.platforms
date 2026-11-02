@@ -223,6 +223,16 @@ config SPRD_SC2723_LDO
 	  set over the ADI bus: the microSD card supply, later the camera
 	  rails.
 
+config SPRD_SC7730_PM_DOMAINS
+	bool "SC7730 PMU power domains (bring-up glue)"
+	depends on ARCH_SPRD && PM && OF
+	select PM_GENERIC_DOMAINS
+	help
+	  The GPU_TOP and MM_TOP power domains of the SC7730 PMU as generic
+	  PM domains, for lima on the Mali-400 MP2 and later the camera.
+	  Also programs the GPU core clock on power-up. Stop-gap until
+	  there are power domain and clock drivers for this SoC.
+
 config SPRD_SC2723_PMIC
 	bool "SC2723 PMIC regmap and interrupts (bring-up glue)"
 	depends on ARCH_SPRD && OF
