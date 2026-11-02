@@ -760,7 +760,7 @@ static void dcam_fill_fmt(struct v4l2_pix_format *f)
 							       f->sizeimage;
 	f->colorspace = V4L2_COLORSPACE_SRGB;
 	f->ycbcr_enc = V4L2_YCBCR_ENC_601;
-	f->quantization = V4L2_QUANTIZATION_LIM_RANGE;
+	f->quantization = V4L2_QUANTIZATION_FULL_RANGE;
 	f->xfer_func = V4L2_XFER_FUNC_SRGB;
 }
 
