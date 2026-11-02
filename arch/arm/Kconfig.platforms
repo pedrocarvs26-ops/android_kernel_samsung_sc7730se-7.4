@@ -198,6 +198,22 @@ config SPRD_RESTART
 	  bootloader ("reboot recovery" boots the recovery partition) and
 	  lets the PMIC watchdog reset the system, as the vendor kernel does.
 
+config SPRD_CLK_CPU
+	bool "SC7730 CPU cluster clock (bring-up glue)"
+	depends on ARCH_SPRD && COMMON_CLK
+	help
+	  The Cortex-A7 cluster clock from MPLL with a TDPLL detour while
+	  MPLL relocks, for CPU frequency scaling. Stop-gap until there is a
+	  clock driver for the SC7730.
+
+config SPRD_SC2723_DCDC_ARM
+	bool "SC2723 DCDC_ARM CPU supply as a regulator (bring-up glue)"
+	depends on ARCH_SPRD && REGULATOR
+	select SPRD_ADI
+	help
+	  The Cortex-A7 cluster supply of the SC2723 PMIC, set over the ADI
+	  bus, for CPU frequency scaling.
+
 config SPRD_CLK_AUX0
 	bool "SC7730 CLK_AUX0 32 kHz output (bring-up glue)"
 	depends on ARCH_SPRD && COMMON_CLK
