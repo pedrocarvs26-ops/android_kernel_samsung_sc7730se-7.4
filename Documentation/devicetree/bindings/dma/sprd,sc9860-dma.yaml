@@ -12,6 +12,13 @@ description: |
   system power without resuming system by DMA interrupts if AGCP DMA
   does not request the IRQ.
 
+  The AP DMA controller of the SC7730 (SC8830) has the same register
+  layout, but only channels 24 to 31 are full channels that can serve
+  slave requests and memory copies, the channel acknowledges a pause in
+  bit 16 instead of bit 2, and it does not support 8-byte transfers, which
+  stall the AHB matrix. It is therefore not compatible with the SC9860
+  controller.
+
 maintainers:
   - Orson Zhai <orsonzhai@gmail.com>
   - Baolin Wang <baolin.wang7@gmail.com>
@@ -19,7 +26,9 @@ maintainers:
 
 properties:
   compatible:
-    const: sprd,sc9860-dma
+    enum:
+      - sprd,sc7730-dma
+      - sprd,sc9860-dma
 
   reg:
     maxItems: 1

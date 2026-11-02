@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/power/sprd,sc7730-pmu-domains.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC7730 PMU power domains
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  Power domains of the SC7730 power management unit. Each domain has a
+  configuration register in the PMU block with a forced shutdown bit, an
+  automatic shutdown bit and power-up delays, and a 4-bit state in
+  PWR_STATUS0_DBG. Behind each domain sits a bus enable bit in the AON APB
+  clock enable register EB0 (offset 0x0), which is shared with other
+  always-on peripherals.
+
+  The power domain specifier is the domain index -
+    0 - GPU_TOP, the Mali-400 MP2 GPU (AON APB EB0 bit 27)
+    1 - MM_TOP, the multimedia domain with camera capture (DCAM, CSI-2)
+        and video blocks (AON APB EB0 bit 25)
+
+properties:
+  compatible:
+    const: sprd,sc7730-pmu-domains
+
+  reg:
+    items:
+      - description: PMU registers
+      - description: AON APB clock enable register EB0
+
+  reg-names:
+    items:
+      - const: pmu
+      - const: aon-apb
+
+  '#power-domain-cells':
+    const: 1
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - '#power-domain-cells'
+
+additionalProperties: false
+
+examples:
+  - |
+    power-controller@402b0000 {
+        compatible = "sprd,sc7730-pmu-domains";
+        reg = <0x402b0000 0x100>, <0x402e0000 0x4>;
+        reg-names = "pmu", "aon-apb";
+        #power-domain-cells = <1>;
+    };
+...

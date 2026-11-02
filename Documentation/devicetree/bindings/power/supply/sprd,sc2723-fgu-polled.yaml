@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/power/supply/sprd,sc2723-fgu-polled.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC2723 PMIC fuel gauge, polled
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  The fuel gauge unit (FGU) of the SC2723 PMIC (registers at offset 0x500
+  of the PMIC). It measures the battery voltage and the current through a
+  sense resistor (nominally 20 mOhm) and integrates the current in a
+  coulomb counter. Its ADC is calibrated by two points stored in the PMIC
+  eFuse. An always-on user register keeps the last state of charge
+  across reboots.
+
+  This node describes the FGU read periodically, without its interrupt.
+  The battery thermistor is not part of the FGU; it is read through an ADC
+  channel and converted with a board specific table. The full description
+  of the FGU as a function of the SC2723 PMIC on the ADI bus is
+  sprd,sc2723-fgu (power/supply/sc27xx-fg.yaml).
+
+allOf:
+  - $ref: power-supply.yaml#
+
+properties:
+  compatible:
+    const: sprd,sc2723-fgu-polled
+
+  monitored-battery: true
+
+  sprd,calib-resistance-micro-ohms:
+    description:
+      Real resistance of the coulomb counter sense resistor in micro Ohms.
+    default: 20000
+
+  io-channels:
+    items:
+      - description: ADC channel of the battery thermistor
+
+  io-channel-names:
+    items:
+      - const: bat-temp
+
+  sprd,bat-temp-table:
+    $ref: /schemas/types.yaml#/definitions/int32-matrix
+    minItems: 2
+    items:
+      items:
+        - description: ADC reading of the thermistor channel (raw counts)
+        - description: Battery temperature in 0.1 degrees Celsius
+    description:
+      Conversion table from the thermistor channel's ADC reading to the
+      battery temperature, sorted by ADC reading. Values in between are
+      interpolated linearly.
+
+  sprd,charge-stop-celsius:
+    items:
+      - description: Battery temperature below which charging is stopped
+      - description: Battery temperature above which charging is stopped
+
+  sprd,charge-resume-celsius:
+    items:
+      - description:
+          Battery temperature above which stopped charging is resumed
+          (lower end of the window)
+      - description:
+          Battery temperature below which stopped charging is resumed
+          (upper end of the window)
+
+dependencies:
+  sprd,bat-temp-table:
+    - io-channels
+    - io-channel-names
+  io-channels:
+    - sprd,bat-temp-table
+  sprd,charge-stop-celsius:
+    - sprd,bat-temp-table
+    - sprd,charge-resume-celsius
+  sprd,charge-resume-celsius:
+    - sprd,charge-stop-celsius
+
+required:
+  - compatible
+  - monitored-battery
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    fuel-gauge {
+        compatible = "sprd,sc2723-fgu-polled";
+        monitored-battery = <&battery>;
+        power-supplies = <&charger>;
+        sprd,calib-resistance-micro-ohms = <20200>;
+        io-channels = <&pmic_adc 1>;
+        io-channel-names = "bat-temp";
+        sprd,bat-temp-table = <653 700>, <1549 400>, <2392 200>,
+                              <3040 0>, <3360 (-100)>, <3537 (-200)>;
+        sprd,charge-stop-celsius = <(-5) 58>;
+        sprd,charge-resume-celsius = <0 53>;
+    };
+...

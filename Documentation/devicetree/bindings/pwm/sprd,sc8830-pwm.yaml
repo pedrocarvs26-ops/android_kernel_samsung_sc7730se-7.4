@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/pwm/sprd,sc8830-pwm.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC8830/SC7730 always-on PWM controller
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  Four PWM channels in the always-on domain of the SC7730 and the other
+  SoCs of the SC8830 ("shark") family, 0x20 apart. Each channel has an
+  8-bit prescaler and an 8-bit counter with modulus and duty fields:
+  period = (prescale + 1) * modulus / rate. A channel stops with its
+  output low. Not compatible with the PWM controller of the UMS512
+  (sprd,ums512-pwm), which has separate modulus, duty and enable registers.
+
+  The channel clock gates are bits 4 to 7 of the AON APB clock enable
+  register EB0, and each channel has a clock select register (bit 0 set
+  selects the 26 MHz clock) in the AON clock block. Both are shared with
+  other always-on peripherals; the optional "aon-apb" and "clk-sel"
+  regions point there.
+
+allOf:
+  - $ref: pwm.yaml#
+
+properties:
+  compatible:
+    const: sprd,sc8830-pwm
+
+  reg:
+    minItems: 1
+    items:
+      - description: PWM channel registers
+      - description: AON APB clock enable register (EB0)
+      - description: Clock select registers of channels 0 to 3
+
+  reg-names:
+    minItems: 1
+    items:
+      - const: pwm
+      - const: aon-apb
+      - const: clk-sel
+
+  clocks:
+    maxItems: 1
+    description: Source clock of the counters (26 MHz)
+
+  '#pwm-cells':
+    const: 3
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - clocks
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    pwm@40260000 {
+        compatible = "sprd,sc8830-pwm";
+        reg = <0x40260000 0x80>, <0x402e0000 0x4>, <0x402d0038 0x10>;
+        reg-names = "pwm", "aon-apb", "clk-sel";
+        clocks = <&ext_26m>;
+        #pwm-cells = <3>;
+    };
+...

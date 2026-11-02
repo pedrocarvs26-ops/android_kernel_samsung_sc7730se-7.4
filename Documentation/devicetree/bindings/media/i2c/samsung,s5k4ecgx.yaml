@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/i2c/samsung,s5k4ecgx.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Samsung S5K4ECGX 5 MP CMOS image sensor
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description:
+  The Samsung S5K4ECGX is a 5 megapixel (2560 x 1920) CMOS image sensor
+  with an integrated image signal processor and autofocus control that
+  outputs YCbCr 4:2:2 or JPEG over a two-lane MIPI CSI-2 interface.
+  It is controlled over I2C with 16-bit registers, most of its settings
+  being written indirectly into its internal memory. It needs a separate
+  1.2 V core supply and has a reset and a standby input.
+
+allOf:
+  - $ref: /schemas/media/video-interface-devices.yaml#
+
+properties:
+  compatible:
+    const: samsung,s5k4ecgx
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+    description: Master clock (MCLK), 24 MHz
+
+  avdd-supply:
+    description: Analog supply, 2.8 V
+
+  dovdd-supply:
+    description: Digital I/O supply, 1.8 V
+
+  dvdd-supply:
+    description: Digital core supply, 1.2 V
+
+  reset-gpios:
+    maxItems: 1
+    description: Reset input, active low
+
+  powerdown-gpios:
+    maxItems: 1
+    description: Standby input, active low
+
+  orientation: true
+
+  rotation: true
+
+  port:
+    $ref: /schemas/graph.yaml#/$defs/port-base
+    additionalProperties: false
+
+    properties:
+      endpoint:
+        $ref: /schemas/media/video-interfaces.yaml#
+        unevaluatedProperties: false
+
+        properties:
+          data-lanes:
+            items:
+              - const: 1
+              - const: 2
+
+          link-frequencies: true
+
+        required:
+          - data-lanes
+
+    required:
+      - endpoint
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - avdd-supply
+  - dovdd-supply
+  - dvdd-supply
+  - reset-gpios
+  - powerdown-gpios
+  - port
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        camera@56 {
+            compatible = "samsung,s5k4ecgx";
+            reg = <0x56>;
+            clocks = <&dcam>;
+            avdd-supply = <&vddcama>;
+            dovdd-supply = <&vddcamio>;
+            dvdd-supply = <&cam_dvdd>;
+            reset-gpios = <&gpio 186 GPIO_ACTIVE_LOW>;
+            powerdown-gpios = <&gpio 188 GPIO_ACTIVE_LOW>;
+            orientation = <1>;
+            rotation = <270>;
+
+            port {
+                endpoint {
+                    remote-endpoint = <&dcam_rear_in>;
+                    data-lanes = <1 2>;
+                };
+            };
+        };
+    };
+...

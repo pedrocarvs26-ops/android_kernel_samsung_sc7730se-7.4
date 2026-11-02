@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/regulator/sprd,sc2723-dcdc-arm.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC2723 PMIC DCDC_ARM regulator
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  DCDC_ARM of the SC2723 PMIC, the supply of the Cortex-A7 cluster of the
+  SC7730. Its output is set in DCDC_ARM_ADI (offset 0xa04 in the PMIC).
+  While MIXED_CTRL0 (offset 0x918) bit 14 is clear, the mode the boot
+  loaders set up, bits 7:5 select a base voltage (1100, 700, 800, 900,
+  1000, 650, 1200 and 1300 mV for the values 0 to 7) and bits 4:0 add
+  3.125 mV steps on top. The regulator is always on.
+
+allOf:
+  - $ref: regulator.yaml#
+
+properties:
+  compatible:
+    const: sprd,sc2723-dcdc-arm
+
+required:
+  - compatible
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    regulator-vddarm {
+        compatible = "sprd,sc2723-dcdc-arm";
+        regulator-name = "vddarm";
+        regulator-min-microvolt = <900000>;
+        regulator-max-microvolt = <1200000>;
+        regulator-always-on;
+        regulator-boot-on;
+    };
+...

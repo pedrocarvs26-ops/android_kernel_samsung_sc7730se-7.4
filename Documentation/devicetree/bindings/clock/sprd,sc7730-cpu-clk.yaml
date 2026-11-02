@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/clock/sprd,sc7730-cpu-clk.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC7730 Cortex-A7 cluster clock
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  Clock of the Cortex-A7 cluster of the SC7730. CA7_CKG_CFG in the AP AHB
+  block selects the core clock source (bits 2:0, for example the 768 MHz
+  TDPLL output or the MPLL) and the AXI and debug dividers (bits 10:8 and
+  18:16). The MPLL, used only for the cluster, is set in MPLL_CFG1 in the
+  AON APB block, 26 MHz * (NINT + KINT / 2^20) with a 6-bit NINT, which
+  limits it to about 1.6 GHz. Both registers sit in blocks shared with
+  other peripherals.
+
+properties:
+  compatible:
+    const: sprd,sc7730-cpu-clk
+
+  reg:
+    items:
+      - description: CA7_CKG_CFG register
+      - description: MPLL_CFG1 register
+
+  reg-names:
+    items:
+      - const: ckg
+      - const: mpll
+
+  '#clock-cells':
+    const: 0
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - '#clock-cells'
+
+additionalProperties: false
+
+examples:
+  - |
+    clock-controller@20d03000 {
+        compatible = "sprd,sc7730-cpu-clk";
+        reg = <0x20d03000 0x4>, <0x402e3070 0x4>;
+        reg-names = "ckg", "mpll";
+        #clock-cells = <0>;
+    };
+...
