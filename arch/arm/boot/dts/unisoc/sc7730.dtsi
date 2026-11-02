@@ -11,6 +11,7 @@
  */
 
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/thermal/thermal.h>
 
 / {
 	#address-cells = <1>;
@@ -28,6 +29,10 @@
 			compatible = "arm,cortex-a7";
 			reg = <0xf00>;
 			clock-frequency = <1300000000>;
+			clocks = <&cpu_clk>;
+			operating-points-v2 = <&cpu_opp>;
+			cpu-supply = <&vddarm>;
+			#cooling-cells = <2>;
 		};
 
 		cpu1: cpu@f01 {
@@ -35,6 +40,10 @@
 			compatible = "arm,cortex-a7";
 			reg = <0xf01>;
 			clock-frequency = <1300000000>;
+			clocks = <&cpu_clk>;
+			operating-points-v2 = <&cpu_opp>;
+			cpu-supply = <&vddarm>;
+			#cooling-cells = <2>;
 		};
 
 		cpu2: cpu@f02 {
@@ -42,6 +51,10 @@
 			compatible = "arm,cortex-a7";
 			reg = <0xf02>;
 			clock-frequency = <1300000000>;
+			clocks = <&cpu_clk>;
+			operating-points-v2 = <&cpu_opp>;
+			cpu-supply = <&vddarm>;
+			#cooling-cells = <2>;
 		};
 
 		cpu3: cpu@f03 {
@@ -49,7 +62,56 @@
 			compatible = "arm,cortex-a7";
 			reg = <0xf03>;
 			clock-frequency = <1300000000>;
+			clocks = <&cpu_clk>;
+			operating-points-v2 = <&cpu_opp>;
+			cpu-supply = <&vddarm>;
+			#cooling-cells = <2>;
 		};
+	};
+
+	/*
+	 * Vendor table (cpufreq-scx35.c, chip ID 0x8730Cxxx): voltages are
+	 * nominal, sboot trims the rail by about -10 mV only until the first
+	 * write. 768 MHz runs from TDPLL, the others from MPLL.
+	 */
+	cpu_opp: opp-table-cpu {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp-768000000 {
+			opp-hz = /bits/ 64 <768000000>;
+			opp-microvolt = <900000>;
+			clock-latency-ns = <300000>;
+			opp-suspend;
+		};
+
+		opp-1000000000 {
+			opp-hz = /bits/ 64 <1000000000>;
+			opp-microvolt = <900000>;
+			clock-latency-ns = <300000>;
+		};
+
+		opp-1200000000 {
+			opp-hz = /bits/ 64 <1200000000>;
+			opp-microvolt = <1000000>;
+			clock-latency-ns = <300000>;
+		};
+
+		opp-1300000000 {
+			opp-hz = /bits/ 64 <1300000000>;
+			opp-microvolt = <1050000>;
+			clock-latency-ns = <300000>;
+		};
+	};
+
+	/* SC2723 DCDC_ARM, the Cortex-A7 cluster supply (mach-sprd/sc2723-dcdc-arm.c) */
+	vddarm: regulator-vddarm {
+		compatible = "sprd,sc2723-dcdc-arm";
+		regulator-name = "vddarm";
+		regulator-min-microvolt = <900000>;
+		regulator-max-microvolt = <1100000>;
+		regulator-always-on;
+		regulator-boot-on;
 	};
 
 	/*
@@ -127,16 +189,24 @@
 	};
 
 	/*
-	 * No CPU frequency scaling yet, so the vendor's passive trips (80, 88
-	 * and 100 C) have nothing to act on: a hot notification at 100 C and
-	 * the vendor's critical shutdown at 110 C.
+	 * The vendor defined passive trips at 80, 88 and 100 C but never
+	 * registered a cooling device for them; here cpufreq throttles from
+	 * 85 C, with a hot notification at 100 C and the vendor's critical
+	 * shutdown at 110 C.
 	 */
 	thermal-zones {
 		cpu-thermal {
+			polling-delay-passive = <500>;
 			polling-delay = <2000>;
 			thermal-sensors = <&ap_thm>;
 
 			trips {
+				cpu_alert: cpu-alert {
+					temperature = <85000>;
+					hysteresis = <5000>;
+					type = "passive";
+				};
+
 				cpu-hot {
 					temperature = <100000>;
 					hysteresis = <5000>;
@@ -147,6 +217,14 @@
 					temperature = <110000>;
 					hysteresis = <0>;
 					type = "critical";
+				};
+			};
+
+			cooling-maps {
+				map0 {
+					trip = <&cpu_alert>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT
+							  THERMAL_NO_LIMIT>;
 				};
 			};
 		};
@@ -200,6 +278,17 @@
 			reg = <0x402f0000 0x1000>, <0x402e0000 0x4000>;
 			reg-names = "thm", "aon-apb";
 			#thermal-sensor-cells = <0>;
+		};
+
+		/*
+		 * Cortex-A7 cluster clock: CA7_CKG_CFG in AP AHB and MPLL_CFG1
+		 * in AON APB (mach-sprd/clk-cpu.c)
+		 */
+		cpu_clk: clock-controller@20d03000 {
+			compatible = "sprd,sc7730-cpu-clk";
+			reg = <0x20d03000 0x4>, <0x402e3070 0x4>;
+			reg-names = "ckg", "mpll";
+			#clock-cells = <0>;
 		};
 
 		/* AP AHB enable bits as gate clocks (mach-sprd/clk-gates.c) */
