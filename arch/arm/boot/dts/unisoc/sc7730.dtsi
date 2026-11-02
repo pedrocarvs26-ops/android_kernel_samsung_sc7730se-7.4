@@ -126,6 +126,32 @@
 		arm,cpu-registers-not-fw-configured;
 	};
 
+	/*
+	 * No CPU frequency scaling yet, so the vendor's passive trips (80, 88
+	 * and 100 C) have nothing to act on: a hot notification at 100 C and
+	 * the vendor's critical shutdown at 110 C.
+	 */
+	thermal-zones {
+		cpu-thermal {
+			polling-delay = <2000>;
+			thermal-sensors = <&ap_thm>;
+
+			trips {
+				cpu-hot {
+					temperature = <100000>;
+					hysteresis = <5000>;
+					type = "hot";
+				};
+
+				cpu-critical {
+					temperature = <110000>;
+					hysteresis = <0>;
+					type = "critical";
+				};
+			};
+		};
+	};
+
 	ext_32k: clock-32k {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
@@ -163,6 +189,17 @@
 			reg = <0x402b0000 0x100>, <0x402e0000 0x4>;
 			reg-names = "pmu", "aon-apb";
 			#power-domain-cells = <1>;
+		};
+
+		/*
+		 * On-die temperature sensor, gated off after the bootloader;
+		 * gate, RTC clock and reset in AON APB. Polled (SPI 26 unused).
+		 */
+		ap_thm: thermal-sensor@402f0000 {
+			compatible = "sprd,sc7730-thermal";
+			reg = <0x402f0000 0x1000>, <0x402e0000 0x4000>;
+			reg-names = "thm", "aon-apb";
+			#thermal-sensor-cells = <0>;
 		};
 
 		/* AP AHB enable bits as gate clocks (mach-sprd/clk-gates.c) */
