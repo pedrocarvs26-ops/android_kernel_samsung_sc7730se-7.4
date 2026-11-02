@@ -8,12 +8,13 @@
  * The VBC has two DA FIFOs (left/right, 16-bit samples) with ping-pong
  * halves of 160 frames; the AP DMA fills them on VBC requests (UIDs 29/30),
  * which sound/soc/sprd/sprd-pcm-dma.c drives with the parameters set here.
+ * Capture reads the AD0/AD1 FIFOs the same way (UIDs 31/32).
  * Register sequences from the vendor 3.10 drivers (sound/soc/sprd/dai/vbc/
  * r2p0, codec/sprd/v4), summarised in vendor-ref/research/audio-report.md
  * of the bring-up repository.
  *
  * The bootloader leaves the VBC owned by the modem side; probe hands it and
- * the codec interrupts/DMA requests to the AP. Playback only for now.
+ * the codec interrupts/DMA requests to the AP.
  */
 
 #include <linux/bitfield.h>
@@ -34,10 +35,14 @@
 /* VBC */
 #define VBDA0			0x00
 #define VBDA1			0x04
+#define VBAD0			0x08
+#define VBAD1			0x0c
 #define VBBUFFSIZE		0x10
 #define VBDABUFFDTA		0x18
 #define  RAMSW_NUMB		BIT(9)
 #define  RAMSW_EN		BIT(10)
+#define  AD0_DMA_EN		BIT(11)
+#define  AD1_DMA_EN		BIT(12)
 #define  DA0_DMA_EN		BIT(13)
 #define  DA1_DMA_EN		BIT(14)
 #define  VBENABLE		BIT(15)
@@ -52,17 +57,23 @@
 #define VBCHNEN			0xc8
 #define  DA0_CHN_EN		BIT(0)
 #define  DA1_CHN_EN		BIT(1)
+#define  AD0_CHN_EN		BIT(2)
+#define  AD1_CHN_EN		BIT(3)
 #define VBC_FIFO_FRAMES		160
 
 /* DP */
 #define AUD_TOP_CTL		0x00
 #define  DAC_EN_L		BIT(0)
+#define  ADC_EN_L		BIT(1)
 #define  DAC_EN_R		BIT(2)
+#define  ADC_EN_R		BIT(3)
 #define AUD_DAC_CTL		0x0c
 #define  DAC_RATE		GENMASK(3, 0)
 #define  DAC_MUTE_EN		BIT(15)
 #define AUD_SDM_CTL0		0x10
 #define  SDM_DODVL		GENMASK(11, 8)
+#define AUD_ADC_CTL		0x18
+#define  ADC_RATE		GENMASK(3, 0)	/* rate / 4000 */
 
 /* AON APB */
 #define AON_EB0			0x00
@@ -90,8 +101,10 @@ static const struct {
 struct sprd_vbc {
 	struct device *dev;
 	void __iomem *vbc, *dp, *aon;
-	struct sprd_pcm_dma_params dma;
-	unsigned int channels;
+	struct sprd_pcm_dma_params dma[2];	/* playback, capture */
+	unsigned int channels[2];
+	spinlock_t lock;			/* VBC/DP registers in trigger */
+	unsigned int running;			/* streams holding VBENABLE */
 };
 
 /* AON APB is read-modify-written by other bring-up glue too */
@@ -136,19 +149,22 @@ static int sprd_vbc_startup(struct snd_pcm_substream *substream,
 {
 	struct sprd_vbc *v = snd_soc_dai_get_drvdata(dai);
 
-	sprd_vbc_clear_da(v);
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		sprd_vbc_clear_da(v);
 	writel((VBC_FIFO_FRAMES - 1) << 8 | (VBC_FIFO_FRAMES - 1),
 	       v->vbc + VBBUFFSIZE);
-	writel(DA_LRCK_POL, v->vbc + VBIISSEL);	/* DA port 0 = codec */
+	/* DA and AD01 port 0 = codec */
+	writel(DA_LRCK_POL, v->vbc + VBIISSEL);
 	writel(DAHPCTL_DEFAULT, v->vbc + DAHPCTL);	/* EQ and ALC off */
-	snd_soc_dai_set_dma_data(dai, substream, &v->dma);
+	snd_soc_dai_set_dma_data(dai, substream, &v->dma[substream->stream]);
 	return 0;
 }
 
 static void sprd_vbc_shutdown(struct snd_pcm_substream *substream,
 			      struct snd_soc_dai *dai)
 {
-	sprd_vbc_clear_da(snd_soc_dai_get_drvdata(dai));
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		sprd_vbc_clear_da(snd_soc_dai_get_drvdata(dai));
 }
 
 static int sprd_vbc_hw_params(struct snd_pcm_substream *substream,
@@ -159,13 +175,21 @@ static int sprd_vbc_hw_params(struct snd_pcm_substream *substream,
 	unsigned int rate = params_rate(params);
 	int i;
 
+	v->channels[substream->stream] = params_channels(params);
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
+		if (rate % 4000)
+			return -EINVAL;
+		sprd_vbc_rmw(v->dp + AUD_ADC_CTL, ADC_RATE,
+			     FIELD_PREP(ADC_RATE, rate / 4000));
+		return 0;
+	}
+
 	for (i = 0; i < ARRAY_SIZE(sprd_vbc_rates); i++)
 		if (sprd_vbc_rates[i].rate == rate)
 			break;
 	if (i == ARRAY_SIZE(sprd_vbc_rates))
 		return -EINVAL;
 
-	v->channels = params_channels(params);
 	sprd_vbc_rmw(v->dp + AUD_DAC_CTL, DAC_RATE,
 		     FIELD_PREP(DAC_RATE, sprd_vbc_rates[i].code));
 	sprd_vbc_rmw(v->dp + AUD_SDM_CTL0, SDM_DODVL,
@@ -177,18 +201,33 @@ static int sprd_vbc_trigger(struct snd_pcm_substream *substream, int cmd,
 			    struct snd_soc_dai *dai)
 {
 	struct sprd_vbc *v = snd_soc_dai_get_drvdata(dai);
-	u32 chn = DA0_CHN_EN | (v->channels > 1 ? DA1_CHN_EN : 0);
-	u32 dma = DA0_DMA_EN | (v->channels > 1 ? DA1_DMA_EN : 0);
+	bool capture = substream->stream == SNDRV_PCM_STREAM_CAPTURE;
+	bool stereo = v->channels[substream->stream] > 1;
+	u32 chn, dma, top;
+	unsigned long flags;
 
+	if (capture) {
+		chn = AD0_CHN_EN | (stereo ? AD1_CHN_EN : 0);
+		dma = AD0_DMA_EN | (stereo ? AD1_DMA_EN : 0);
+		top = ADC_EN_L | ADC_EN_R;
+	} else {
+		chn = DA0_CHN_EN | (stereo ? DA1_CHN_EN : 0);
+		dma = DA0_DMA_EN | (stereo ? DA1_DMA_EN : 0);
+		top = DAC_EN_L | DAC_EN_R;
+	}
+
+	spin_lock_irqsave(&v->lock, flags);
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		sprd_vbc_rmw(v->dp + AUD_DAC_CTL, DAC_MUTE_EN, 0);
-		sprd_vbc_rmw(v->dp + AUD_TOP_CTL, 0, DAC_EN_L | DAC_EN_R);
+		if (!capture)
+			sprd_vbc_rmw(v->dp + AUD_DAC_CTL, DAC_MUTE_EN, 0);
+		sprd_vbc_rmw(v->dp + AUD_TOP_CTL, 0, top);
 		sprd_vbc_rmw(v->vbc + VBCHNEN, 0, chn);
 		sprd_vbc_rmw(v->vbc + VBDABUFFDTA, 0, dma);
-		sprd_vbc_rmw(v->vbc + VBDABUFFDTA, 0, VBENABLE);
+		if (!v->running++)
+			sprd_vbc_rmw(v->vbc + VBDABUFFDTA, 0, VBENABLE);
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -198,15 +237,27 @@ static int sprd_vbc_trigger(struct snd_pcm_substream *substream, int cmd,
 		 * stay powered between streams (pmdown_time), and an analog
 		 * DAC without a running sigma-delta modulator picks up noise
 		 * that the speaker amplifier makes audible. They go off with
-		 * the system suspend, like the analog path.
+		 * the system suspend, like the analog path. The ADCs go off
+		 * with their stream.
 		 */
-		sprd_vbc_rmw(v->vbc + VBDABUFFDTA, VBENABLE | DA0_DMA_EN |
-			     DA1_DMA_EN, 0);
-		sprd_vbc_rmw(v->vbc + VBCHNEN, DA0_CHN_EN | DA1_CHN_EN, 0);
+		if (capture) {
+			chn = AD0_CHN_EN | AD1_CHN_EN;
+			dma = AD0_DMA_EN | AD1_DMA_EN;
+			sprd_vbc_rmw(v->dp + AUD_TOP_CTL, top, 0);
+		} else {
+			chn = DA0_CHN_EN | DA1_CHN_EN;
+			dma = DA0_DMA_EN | DA1_DMA_EN;
+		}
+		if (v->running && !--v->running)
+			dma |= VBENABLE;
+		sprd_vbc_rmw(v->vbc + VBDABUFFDTA, dma, 0);
+		sprd_vbc_rmw(v->vbc + VBCHNEN, chn, 0);
 		break;
 	default:
+		spin_unlock_irqrestore(&v->lock, flags);
 		return -EINVAL;
 	}
+	spin_unlock_irqrestore(&v->lock, flags);
 	return 0;
 }
 
@@ -217,7 +268,10 @@ static const struct snd_soc_dai_ops sprd_vbc_dai_ops = {
 	.trigger = sprd_vbc_trigger,
 };
 
-/* DA0 = left, DA1 = right; sprd-pcm-dma feeds them non-interleaved */
+/*
+ * DA0/AD0 = left, DA1/AD1 = right, one DMA channel each. The name is kept
+ * from the playback-only days: userspace sets pmdown_time through it.
+ */
 static struct snd_soc_dai_driver sprd_vbc_dai = {
 	.name = "vbc-playback",
 	.playback = {
@@ -227,6 +281,14 @@ static struct snd_soc_dai_driver sprd_vbc_dai = {
 		.rates = SNDRV_PCM_RATE_8000_96000,
 		.formats = SNDRV_PCM_FMTBIT_S16_LE,
 	},
+	.capture = {
+		.stream_name = "VBC Capture",
+		.channels_min = 1,
+		.channels_max = 2,
+		.rates = SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |
+			 SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_48000,
+		.formats = SNDRV_PCM_FMTBIT_S16_LE,
+	},
 	.ops = &sprd_vbc_dai_ops,
 };
 
@@ -234,7 +296,8 @@ static int sprd_vbc_suspend(struct snd_soc_component *component)
 {
 	struct sprd_vbc *v = snd_soc_component_get_drvdata(component);
 
-	sprd_vbc_rmw(v->dp + AUD_TOP_CTL, DAC_EN_L | DAC_EN_R, 0);
+	sprd_vbc_rmw(v->dp + AUD_TOP_CTL,
+		     DAC_EN_L | DAC_EN_R | ADC_EN_L | ADC_EN_R, 0);
 	return 0;
 }
 
@@ -267,6 +330,7 @@ static int sprd_vbc_probe(struct platform_device *pdev)
 	if (!v)
 		return -ENOMEM;
 	v->dev = dev;
+	spin_lock_init(&v->lock);
 	v->aon = sprd_vbc_map(pdev, "aon-apb");
 	v->vbc = sprd_vbc_map(pdev, "vbc");
 	v->dp = sprd_vbc_map(pdev, "dp");
@@ -288,12 +352,23 @@ static int sprd_vbc_probe(struct platform_device *pdev)
 	sprd_vbc_clear_da(v);
 
 	for (i = 0; i < 2; i++) {
-		v->dma.dev_phys[i] = res->start + (i ? VBDA1 : VBDA0);
-		v->dma.datawidth[i] = DMA_SLAVE_BUSWIDTH_2_BYTES;
-		v->dma.fragment_len[i] = VBC_FIFO_FRAMES * 2;
+		v->dma[SNDRV_PCM_STREAM_PLAYBACK].dev_phys[i] =
+			res->start + (i ? VBDA1 : VBDA0);
+		v->dma[SNDRV_PCM_STREAM_CAPTURE].dev_phys[i] =
+			res->start + (i ? VBAD1 : VBAD0);
+		v->dma[SNDRV_PCM_STREAM_PLAYBACK].datawidth[i] =
+			DMA_SLAVE_BUSWIDTH_2_BYTES;
+		v->dma[SNDRV_PCM_STREAM_CAPTURE].datawidth[i] =
+			DMA_SLAVE_BUSWIDTH_2_BYTES;
+		v->dma[SNDRV_PCM_STREAM_PLAYBACK].fragment_len[i] =
+			VBC_FIFO_FRAMES * 2;
+		v->dma[SNDRV_PCM_STREAM_CAPTURE].fragment_len[i] =
+			VBC_FIFO_FRAMES * 2;
 	}
-	v->dma.chan_name[0] = "normal_p_l";
-	v->dma.chan_name[1] = "normal_p_r";
+	v->dma[SNDRV_PCM_STREAM_PLAYBACK].chan_name[0] = "normal_p_l";
+	v->dma[SNDRV_PCM_STREAM_PLAYBACK].chan_name[1] = "normal_p_r";
+	v->dma[SNDRV_PCM_STREAM_CAPTURE].chan_name[0] = "normal_c_l";
+	v->dma[SNDRV_PCM_STREAM_CAPTURE].chan_name[1] = "normal_c_r";
 
 	platform_set_drvdata(pdev, v);
 	return devm_snd_soc_register_component(dev, &sprd_vbc_component,
