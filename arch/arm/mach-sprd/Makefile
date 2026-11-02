@@ -11,3 +11,4 @@ obj-$(CONFIG_SPRD_SC2723_LDO)	+= sc2723-ldo.o
 obj-$(CONFIG_SPRD_SC2723_ADC)	+= sc2723-adc.o
 obj-$(CONFIG_SPRD_SC2723_FGU)	+= sc2723-fgu.o
 obj-$(CONFIG_SPRD_SC2723_PMIC)	+= sc2723-pmic.o
+obj-$(CONFIG_SPRD_SC7730_PM_DOMAINS)	+= pm-domains.o
