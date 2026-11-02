@@ -203,8 +203,8 @@
 	 */
 	audio_pcm: audio-platform {
 		compatible = "sprd,pcm-platform";
-		dmas = <&ap_dma 29>, <&ap_dma 30>;
-		dma-names = "normal_p_l", "normal_p_r";
+		dmas = <&ap_dma 29>, <&ap_dma 30>, <&ap_dma 31>, <&ap_dma 32>;
+		dma-names = "normal_p_l", "normal_p_r", "normal_c_l", "normal_c_r";
 		#sound-dai-cells = <0>;
 		status = "disabled";
 	};
