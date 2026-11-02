@@ -85,6 +85,8 @@
 #define  DPI_REG_UPDATE		BIT(5)
 #define DISPC_DPI_H_TIMING	0x84
 #define DISPC_DPI_V_TIMING	0x88
+#define DISPC_DPI_STS1		0x90
+#define  DPI_STS1_FRAME		GENMASK(15, 0)	/* +1 per frame */
 #define  DPI_SYNC		GENMASK(7, 0)
 #define  DPI_BP			GENMASK(19, 8)
 #define  DPI_FP			GENMASK(31, 20)
@@ -364,6 +366,14 @@ static void sprd_dispc_crtc_atomic_disable(struct drm_crtc *crtc,
 	spin_unlock_irq(&crtc->dev->event_lock);
 }
 
+/* the DPI block counts frames in hardware */
+static u32 sprd_dispc_get_vblank_counter(struct drm_crtc *crtc)
+{
+	struct sprd_dispc *d = to_sprd_dispc(crtc->dev);
+
+	return FIELD_GET(DPI_STS1_FRAME, readl(d->base + DISPC_DPI_STS1));
+}
+
 static int sprd_dispc_enable_vblank(struct drm_crtc *crtc)
 {
 	sprd_dispc_int_update(to_sprd_dispc(crtc->dev), 0, INT_VSYNC);
@@ -405,6 +415,7 @@ static const struct drm_crtc_funcs sprd_dispc_crtc_funcs = {
 	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
 	.enable_vblank = sprd_dispc_enable_vblank,
 	.disable_vblank = sprd_dispc_disable_vblank,
+	.get_vblank_counter = sprd_dispc_get_vblank_counter,
 };
 
 static int sprd_dispc_connector_get_modes(struct drm_connector *connector)
@@ -632,6 +643,7 @@ static int sprd_dispc_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	drm->max_vblank_count = FIELD_MAX(DPI_STS1_FRAME);
 	ret = drm_vblank_init(drm, 1);
 	if (ret)
 		return ret;
