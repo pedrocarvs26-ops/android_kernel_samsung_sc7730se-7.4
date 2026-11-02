@@ -837,7 +837,24 @@ static int dcam_link_validate(struct media_link *link)
 	return 0;
 }
 
+/* one sensor at a time: the other link must be disabled first */
+static int dcam_link_setup(struct media_entity *entity,
+			   const struct media_pad *local,
+			   const struct media_pad *remote, u32 flags)
+{
+	struct media_link *link;
+
+	if (!(flags & MEDIA_LNK_FL_ENABLED))
+		return 0;
+	list_for_each_entry(link, &entity->links, list)
+		if (link->sink == local && link->source != remote &&
+		    (link->flags & MEDIA_LNK_FL_ENABLED))
+			return -EBUSY;
+	return 0;
+}
+
 static const struct media_entity_operations dcam_entity_ops = {
+	.link_setup = dcam_link_setup,
 	.link_validate = dcam_link_validate,
 };
 
