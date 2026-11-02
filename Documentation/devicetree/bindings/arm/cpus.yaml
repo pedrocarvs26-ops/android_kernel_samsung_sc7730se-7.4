@@ -289,6 +289,7 @@ properties:
           - rockchip,rk3036-smp
           - rockchip,rk3066-smp
           - socionext,milbeaut-m10v-smp
+          - sprd,sc7730-smp
           - ste,dbx500-smp
           - ti,am3352
           - ti,am4372

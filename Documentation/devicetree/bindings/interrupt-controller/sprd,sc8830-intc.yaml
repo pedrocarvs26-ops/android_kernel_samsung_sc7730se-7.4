@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/interrupt-controller/sprd,sc8830-intc.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC8830/SC7730 interrupt wake-up gates (INTC)
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  The SC7730 and the other SoCs of the SC8830 ("shark") family put four
+  INTC blocks in front of the GIC. Every shared peripheral interrupt also
+  passes through an enable bit in one of them: INTC n covers SPI 32n to
+  32n + 31, the bit number is the SPI number modulo 32, bits 0 and 1 of
+  each block are not wired. Interrupts reach the GIC whether the bit is
+  set or not, but once all cores are in WFI the GIC clock stops, and only
+  interrupts enabled in an INTC block wake a core up again.
+
+  Each block has an IRQ enable register at offset 0x8 and an IRQ disable
+  register at 0xc. The clock gates of the four blocks are bits 19 to 22 of
+  the AP APB clock enable register; the optional fifth register region
+  points there, so that the blocks are clocked before they are written.
+  That register is shared with the enable bits of other AP APB
+  peripherals.
+
+  The controller is stacked on the GIC and uses the same interrupt
+  specifier.
+
+properties:
+  compatible:
+    const: sprd,sc8830-intc
+
+  reg:
+    minItems: 4
+    items:
+      - description: INTC0, SPI 0-31
+      - description: INTC1, SPI 32-63
+      - description: INTC2, SPI 64-95
+      - description: INTC3, SPI 96-127
+      - description: AP APB clock enable register (EB)
+
+  interrupt-controller: true
+
+  '#interrupt-cells':
+    const: 3
+    description: The cells have the same encoding as defined in arm,gic.yaml.
+
+required:
+  - compatible
+  - reg
+  - interrupt-controller
+  - '#interrupt-cells'
+
+allOf:
+  - $ref: /schemas/interrupt-controller.yaml#
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    interrupt-controller@71400000 {
+        compatible = "sprd,sc8830-intc";
+        reg = <0x71400000 0x1000>, <0x71500000 0x1000>,
+              <0x71600000 0x1000>, <0x71700000 0x1000>,
+              <0x71300000 0x4>;
+        interrupt-parent = <&gic>;
+        interrupt-controller;
+        #interrupt-cells = <3>;
+    };
+...

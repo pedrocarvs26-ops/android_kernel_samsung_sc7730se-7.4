@@ -25,6 +25,16 @@ properties:
 
   monitored-battery: true
 
+  extcon:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      Cable detector (for example a USB switch / MUIC) that tells the type
+      of the attached port, for boards that feed USB and wall chargers into
+      the same input. The input current mode follows it, USB 500 mA mode on
+      a standard downstream port, high-current mode on a dedicated charger
+      (up to summit,mains-current-limit-microamp) or on a charging
+      downstream port (at most 1.5 A, the BC 1.2 limit).
+
   summit,enable-usb-charging:
     type: boolean
     description: Enable charging through USB.

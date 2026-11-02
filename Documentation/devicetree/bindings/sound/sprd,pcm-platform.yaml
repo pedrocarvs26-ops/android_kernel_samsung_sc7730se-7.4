@@ -16,9 +16,14 @@ properties:
     const: sprd,pcm-platform
 
   dmas:
+    minItems: 2
     maxItems: 10
 
   dma-names:
+    description:
+      Channels for the streams the board uses, in this order; a
+      playback-only setup lists the first two.
+    minItems: 2
     items:
       - const: normal_p_l
       - const: normal_p_r
@@ -30,6 +35,12 @@ properties:
       - const: loop_p
       - const: voip_c
       - const: voip_p
+
+  '#sound-dai-cells':
+    description:
+      Needed when a sound card refers to the platform by phandle, for
+      example as the "plat" of a simple-audio-card.
+    const: 0
 
 required:
   - compatible
@@ -52,5 +63,14 @@ examples:
                   "voice_c", "fast_p",
                   "loop_c", "loop_p",
                   "voip_c", "voip_p";
+    };
+
+  - |
+    /* SC7730: playback only, AP DMA requests of the VBC DA FIFOs */
+    audio-platform {
+      compatible = "sprd,pcm-platform";
+      dmas = <&ap_dma 29>, <&ap_dma 30>;
+      dma-names = "normal_p_l", "normal_p_r";
+      #sound-dai-cells = <0>;
     };
 ...

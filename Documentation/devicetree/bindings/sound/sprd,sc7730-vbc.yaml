@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/sound/sprd,sc7730-vbc.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC7730 voice band codec interface (VBC)
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  Audio interface of the SC7730 and the other SoCs of the SC8830 ("shark")
+  family, used as the CPU DAI. The VBC has two DA FIFOs (left and right,
+  16-bit samples, ping-pong halves of 160 frames) and four AD FIFOs, which
+  the AP DMA serves on VBC requests. It feeds the digital part of the audio
+  codec in the SoC (the "DP": DAC filters, sample rate converters and the
+  sigma-delta modulators), which talks to the analog codec in the SC2723
+  PMIC over an internal link.
+
+  Clock gates, soft reset and the hand-over of the VBC and its interrupts
+  and DMA requests from the modem side are bits in AON APB registers shared
+  with other always-on peripherals; the "aon-apb" region points there.
+
+allOf:
+  - $ref: dai-common.yaml#
+
+properties:
+  compatible:
+    const: sprd,sc7730-vbc
+
+  reg:
+    items:
+      - description: VBC registers (FIFOs and their control)
+      - description: Digital audio codec part (DP)
+      - description: AON APB registers
+
+  reg-names:
+    items:
+      - const: vbc
+      - const: dp
+      - const: aon-apb
+
+  '#sound-dai-cells':
+    const: 0
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - '#sound-dai-cells'
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    audio-controller@40020000 {
+        compatible = "sprd,sc7730-vbc";
+        reg = <0x40020000 0x1000>, <0x40000000 0x1000>,
+              <0x402e0000 0x4000>;
+        reg-names = "vbc", "dp", "aon-apb";
+        #sound-dai-cells = <0>;
+    };
+...

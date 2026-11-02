@@ -1,0 +1,167 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/mmc/sprd,sc7730-sdhci.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC7730 SD/SDIO/eMMC host controller
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  SDHCI 3.0 compatible hosts of the SC7730 and the other SoCs of the
+  SC8830 ("shark") family: SDIO0 to SDIO2 and the eMMC host. Not
+  compatible with the later Spreadtrum hosts (sprd,sdhci-r11). The
+  capabilities register does not report the base clock and ADMA is not
+  supported.
+
+  The base clock comes from a mux in the AP clock block, one 32-bit
+  configuration register per host ("clk-cfg" region): bits 1:0 select one
+  of four parent clocks, and for SDIO0 bits 10:8 hold an additional divider
+  (divide by n + 1).
+
+  Clock gate and soft reset of the hosts are bits in the AP AHB clock
+  enable register (EB, offset 0x0) and reset register (RST, offset 0x4),
+  for example EB bit 8 / RST bit 11 for SDIO0 and EB bit 9 / RST bit 12
+  for SDIO1. These registers are shared with other AP AHB peripherals; the
+  optional "ap-ahb" region points there.
+
+  The hosts have programmable delay lines for the data sampling clock,
+  which double data rate modes need.
+
+properties:
+  compatible:
+    const: sprd,sc7730-sdhci
+
+  reg:
+    minItems: 2
+    items:
+      - description: SDHCI registers
+      - description: Base clock configuration register of this host
+      - description: AP AHB clock enable and reset registers
+
+  reg-names:
+    minItems: 2
+    items:
+      - const: sdhci
+      - const: clk-cfg
+      - const: ap-ahb
+
+  interrupts:
+    maxItems: 1
+
+  sprd,clk-parent-rates:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    description:
+      Rates in Hz of the four parent clocks of the base clock mux, in the
+      order of the mux selector (eMMC and SDIO0 26, 256, 312 and 384 MHz,
+      SDIO1 48, 76.8, 96 and 128 MHz on the SC7730).
+    minItems: 4
+    maxItems: 4
+
+  sprd,clk-sel:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    maximum: 3
+    description:
+      Parent clock to select in the base clock mux. Without it the
+      selection made by the boot loader is kept.
+
+  sprd,clk-has-div:
+    type: boolean
+    description:
+      The base clock configuration register of this host has a divider in
+      bits 10:8.
+
+  sprd,ahb-eb-bit:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    maximum: 31
+    description: Bit of this host in the AP AHB clock enable register.
+
+  sprd,ahb-rst-bit:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    maximum: 31
+    description: Bit of this host in the AP AHB soft reset register.
+
+  sprd,write-delay:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Delay line setting for the write data clock in DDR modes.
+
+  sprd,read-pos-delay:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      Delay line setting for sampling read data on the positive clock edge
+      in DDR modes.
+
+  sprd,read-neg-delay:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      Delay line setting for sampling read data on the negative clock edge
+      in DDR modes.
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - interrupts
+  - sprd,clk-parent-rates
+
+allOf:
+  - $ref: sdhci-common.yaml#
+  - if:
+      properties:
+        reg-names:
+          contains:
+            const: ap-ahb
+    then:
+      required:
+        - sprd,ahb-eb-bit
+        - sprd,ahb-rst-bit
+    else:
+      properties:
+        sprd,ahb-eb-bit: false
+        sprd,ahb-rst-bit: false
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+
+    mmc@20600000 {
+        compatible = "sprd,sc7730-sdhci";
+        reg = <0x20600000 0x1000>, <0x71200054 0x4>;
+        reg-names = "sdhci", "clk-cfg";
+        interrupts = <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>;
+        sprd,clk-parent-rates = <26000000 256000000 312000000 384000000>;
+        bus-width = <8>;
+        non-removable;
+        no-sd;
+        no-sdio;
+        no-1-8-v;
+        cap-mmc-highspeed;
+        mmc-ddr-3_3v;
+        max-frequency = <52000000>;
+        sprd,write-delay = <0x08>;
+        sprd,read-pos-delay = <0x04>;
+        sprd,read-neg-delay = <0x04>;
+    };
+
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+
+    mmc@20300000 {
+        compatible = "sprd,sc7730-sdhci";
+        reg = <0x20300000 0x1000>, <0x71200048 0x4>, <0x20d00000 0x8>;
+        reg-names = "sdhci", "clk-cfg", "ap-ahb";
+        interrupts = <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>;
+        sprd,clk-parent-rates = <26000000 256000000 312000000 384000000>;
+        sprd,clk-sel = <3>;
+        sprd,clk-has-div;
+        sprd,ahb-eb-bit = <8>;
+        sprd,ahb-rst-bit = <11>;
+        bus-width = <4>;
+        no-1-8-v;
+        cap-sd-highspeed;
+    };
+...

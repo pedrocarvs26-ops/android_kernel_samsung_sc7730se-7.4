@@ -1,0 +1,151 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/sprd,sc7730-dcam.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC7730 camera capture (DCAM and CSI-2 receiver)
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  Camera capture of the SC7730 and the other SoCs of the SC8830 ("shark")
+  family: a Synopsys DesignWare MIPI CSI-2 host (version 1.03) with two
+  D-PHYs, D-PHY A with up to two data lanes and D-PHY C with one, and the
+  DCAM capture engine, which writes the received frames to memory (YUV
+  4:2:0 or 4:2:2 semi-planar, optionally scaled). Only one D-PHY receives
+  at a time.
+
+  The block sits in the MM power domain. Its bus gates, resets and the
+  CSI-2 D-PHY selection are bits in the MM AHB registers, its clocks
+  (including the master clock MCLK for the image sensors, 24 MHz) are set
+  in the MM clock registers, and the power-down bit of D-PHY A is in the
+  AON APB power control register. All three register blocks are shared
+  with other blocks.
+
+properties:
+  compatible:
+    const: sprd,sc7730-dcam
+
+  reg:
+    items:
+      - description: DCAM registers
+      - description: CSI-2 host registers
+      - description: MM AHB registers (bus gates and resets)
+      - description: MM clock configuration registers
+      - description: AON APB registers
+
+  reg-names:
+    items:
+      - const: dcam
+      - const: csi
+      - const: mm-ahb
+      - const: mm-clk
+      - const: aon-apb
+
+  interrupts:
+    maxItems: 1
+
+  power-domains:
+    maxItems: 1
+
+  '#clock-cells':
+    const: 0
+    description: The sensor master clock output (MCLK).
+
+  ports:
+    $ref: /schemas/graph.yaml#/properties/ports
+
+    properties:
+      port@0:
+        $ref: /schemas/graph.yaml#/$defs/port-base
+        unevaluatedProperties: false
+        description: CSI-2 input on D-PHY A
+
+        properties:
+          endpoint:
+            $ref: video-interfaces.yaml#
+            unevaluatedProperties: false
+
+            properties:
+              data-lanes:
+                minItems: 1
+                items:
+                  - const: 1
+                  - const: 2
+
+            required:
+              - data-lanes
+
+      port@1:
+        $ref: /schemas/graph.yaml#/$defs/port-base
+        unevaluatedProperties: false
+        description: CSI-2 input on D-PHY C
+
+        properties:
+          endpoint:
+            $ref: video-interfaces.yaml#
+            unevaluatedProperties: false
+
+            properties:
+              data-lanes:
+                items:
+                  - const: 1
+
+            required:
+              - data-lanes
+
+    required:
+      - port@0
+      - port@1
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - interrupts
+  - power-domains
+  - '#clock-cells'
+  - ports
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+
+    camera@60800000 {
+        compatible = "sprd,sc7730-dcam";
+        reg = <0x60800000 0x1000>, <0x60c00000 0x1000>,
+              <0x60d00000 0x100>, <0x60e00000 0x100>,
+              <0x402e0000 0x100>;
+        reg-names = "dcam", "csi", "mm-ahb", "mm-clk", "aon-apb";
+        interrupts = <GIC_SPI 45 IRQ_TYPE_LEVEL_HIGH>;
+        power-domains = <&pmu_domains 1>;
+        #clock-cells = <0>;
+
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@0 {
+                reg = <0>;
+
+                endpoint {
+                    remote-endpoint = <&rear_camera_out>;
+                    data-lanes = <1 2>;
+                };
+            };
+
+            port@1 {
+                reg = <1>;
+
+                endpoint {
+                    remote-endpoint = <&front_camera_out>;
+                    data-lanes = <1>;
+                };
+            };
+        };
+    };
+...

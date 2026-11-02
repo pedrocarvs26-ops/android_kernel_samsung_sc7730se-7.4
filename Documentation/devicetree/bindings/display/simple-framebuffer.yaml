@@ -126,6 +126,13 @@ properties:
     $ref: /schemas/types.yaml#/definitions/phandle
     description: Display panel node
 
+  backlight:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      Backlight of the display the framebuffer is shown on, for systems
+      where nothing else switches it. It is turned off together with the
+      framebuffer output and on again with it.
+
   allwinner,pipeline:
     description: Pipeline used by the framebuffer on Allwinner SoCs
     enum:

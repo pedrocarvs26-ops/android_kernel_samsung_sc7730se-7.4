@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/display/sprd/sprd,sc7730-dispc.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC7730 display controller (DISPC)
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  Display controller of the SC7730 and the other SoCs of the SC8830
+  ("shark") family. It reads one image layer and one OSD layer from memory
+  without an IOMMU and drives a DPI (video mode) output, which feeds the
+  DesignWare MIPI DSI host at 0x21800000.
+  Layer registers are double buffered and latch at the next VSYNC. The
+  register layout differs from the DPU of the SharkL3 (sprd,sharkl3-dpu).
+
+  The binding describes a DISPC whose clocks, the DSI host, the D-PHY and
+  the panel were set up by the boot loader. Its clock gates (AP AHB EB
+  bit 1, AON APB EB1 bit 11, AP APB EB bit 18) and clock configuration
+  (AP clock registers 0x2c to 0x34) sit in registers shared with other
+  peripherals and are only read. The optional "dsi" region gives access to
+  the DSI host for panel commands in low power command mode, and
+  panel-power-gpios lists the panel's supply switches, so that the panel
+  can be switched off and on again.
+
+properties:
+  compatible:
+    const: sprd,sc7730-dispc
+
+  reg:
+    minItems: 5
+    items:
+      - description: DISPC registers
+      - description: AP AHB clock enable register
+      - description: AON APB clock enable registers EB0 and EB1
+      - description: AP APB clock enable register
+      - description: AP clock configuration registers
+      - description: DesignWare MIPI DSI host registers
+
+  reg-names:
+    minItems: 5
+    items:
+      - const: dispc
+      - const: ap-ahb
+      - const: aon-apb
+      - const: ap-apb
+      - const: ap-clk
+      - const: dsi
+
+  interrupts:
+    maxItems: 1
+
+  backlight:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Backlight of the attached panel.
+
+  panel-power-gpios:
+    minItems: 1
+    maxItems: 3
+    description:
+      Supply switches of the attached panel, switched on in the listed
+      order and off in reverse order.
+
+  width-mm:
+    description: Width of the active area of the attached panel in mm.
+
+  height-mm:
+    description: Height of the active area of the attached panel in mm.
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - interrupts
+
+allOf:
+  - if:
+      required:
+        - panel-power-gpios
+    then:
+      properties:
+        reg:
+          minItems: 6
+        reg-names:
+          minItems: 6
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+
+    display-controller@20800000 {
+        compatible = "sprd,sc7730-dispc";
+        reg = <0x20800000 0x1000>, <0x20d00000 0x4>,
+              <0x402e0000 0x8>, <0x71300000 0x4>,
+              <0x71200000 0x40>, <0x21800000 0x1000>;
+        reg-names = "dispc", "ap-ahb", "aon-apb", "ap-apb",
+                    "ap-clk", "dsi";
+        interrupts = <GIC_SPI 46 IRQ_TYPE_LEVEL_HIGH>;
+        backlight = <&backlight>;
+        panel-power-gpios = <&gpio 152 GPIO_ACTIVE_HIGH>,
+                            <&gpio 232 GPIO_ACTIVE_HIGH>,
+                            <&gpio 233 GPIO_ACTIVE_HIGH>;
+        width-mm = <129>;
+        height-mm = <206>;
+    };
+...

@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/regulator/sprd,sc2723-ldo.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC2723 PMIC LDO regulator
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  One LDO regulator of the SC2723 PMIC. Each LDO is switched by a
+  power-down bit (set means off) and set by a voltage field, both in PMIC
+  registers that several LDOs share; the output voltage is
+  sprd,min-microvolt + n * sprd,step-microvolt for the field value n.
+  For example LDO_SDCORE has its power-down bit 10 at offset 0x814 and its
+  voltage in bits 15:8 at offset 0x830, LDO_CAMIO bit 6 at 0x814 and bits
+  14:8 at 0x81c.
+
+allOf:
+  - $ref: regulator.yaml#
+
+properties:
+  compatible:
+    const: sprd,sc2723-ldo
+
+  sprd,pd-reg:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    items:
+      - description: Offset of the power-down register in the PMIC
+      - description: Bit number of this LDO in it
+        maximum: 15
+    description: Power-down bit of the LDO, set means off.
+
+  sprd,vsel-reg:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    items:
+      - description: Offset of the voltage register in the PMIC
+      - description: Mask of the voltage field of this LDO in it
+        minimum: 1
+        maximum: 0xffff
+    description: Voltage field of the LDO.
+
+  sprd,min-microvolt:
+    description: Output voltage at field value 0.
+    default: 1200000
+
+  sprd,step-microvolt:
+    description: Voltage step per field value.
+    default: 10000
+
+required:
+  - compatible
+  - regulator-name
+  - sprd,pd-reg
+  - sprd,vsel-reg
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    regulator-vddcamio {
+        compatible = "sprd,sc2723-ldo";
+        regulator-name = "vddcamio";
+        sprd,pd-reg = <0x814 6>;
+        sprd,vsel-reg = <0x81c 0x7f00>;
+        sprd,min-microvolt = <1150000>;
+        sprd,step-microvolt = <6250>;
+        regulator-min-microvolt = <1800000>;
+        regulator-max-microvolt = <1800000>;
+    };
+...

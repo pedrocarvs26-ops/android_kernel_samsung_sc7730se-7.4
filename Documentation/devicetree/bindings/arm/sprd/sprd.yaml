@@ -19,6 +19,10 @@ properties:
     oneOf:
       - items:
           - enum:
+              - samsung,gtelwifi # Samsung Galaxy Tab E 9.6 WiFi (SM-T560)
+          - const: sprd,sc7730
+      - items:
+          - enum:
               - sprd,sc9836-openphone
           - const: sprd,sc9836
       - items:
@@ -39,6 +43,25 @@ properties:
           - enum:
               - sprd,ums9620-2h10
           - const: sprd,ums9620
+
+  sprd,sc-id:
+    $ref: /schemas/types.yaml#/definitions/uint32-matrix
+    minItems: 1
+    maxItems: 16
+    items:
+      items:
+        - description: Chip family ID, 8830 for the SC7730/SC8830 SoCs
+        - description:
+            Hardware revision of the board (the boot loader's hw_revision);
+            the boot loader takes the first entry that matches it exactly
+        - description: SoC revision field of the table entry, 0x20000
+    description:
+      Board identification for the Spreadtrum boot loaders of the SC7730
+      (SC8830) generation. They pick the device tree to boot from a table
+      appended to the Android boot image (the "dt.img", magic "SPRD", the
+      layout of Qualcomm's QCDT version 1) whose entries are built from
+      these triplets. One device tree can list several triplets to be used
+      on several board revisions. The kernel does not use the property.
 
 additionalProperties: true
 

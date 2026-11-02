@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/mfd/sprd,sc2723-adi-pmic.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spreadtrum SC2723 PMIC on the SC7730 ADI bus
+
+maintainers:
+  - Deniz Kokden <koekdendeniz@gmail.com>
+
+description: |
+  The SC2723 companion PMIC of the SC7730/SC8830 SoCs, reached through the
+  SoC's analog-digital interface (ADI) at 0x40030000, whose software
+  channel maps the PMIC registers to 0x40038000 and up. This node stands
+  for the PMIC as seen through that fixed window; its children are the
+  PMIC functions, with their register offset in the PMIC as unit address.
+
+  The PMIC interrupt controller (ANA_INT, at offset 0x380) combines the
+  interrupts of the PMIC functions into one SoC interrupt. Its sources -
+    0 - auxiliary ADC
+    1 - GPIO
+    2 - RTC
+    3 - watchdog
+    4 - fuel gauge
+    5 - EIC (power key, external reset input and other inputs)
+    6 - headset button
+    7 - audio protection
+    8 - calibration
+    9 - thermal protection (TPC)
+    10 - DCDC over temperature
+
+properties:
+  compatible:
+    const: sprd,sc2723-adi-pmic
+
+  interrupts:
+    maxItems: 1
+
+  interrupt-controller: true
+
+  '#interrupt-cells':
+    const: 2
+
+  '#address-cells':
+    const: 1
+
+  '#size-cells':
+    const: 0
+
+patternProperties:
+  "^audio-codec@[0-9a-f]+$":
+    type: object
+    $ref: /schemas/sound/sprd,sc2723-codec.yaml#
+
+  "^gpio@[0-9a-f]+$":
+    type: object
+    $ref: /schemas/gpio/sprd,gpio-eic.yaml#
+
+  "^rtc@[0-9a-f]+$":
+    type: object
+    $ref: /schemas/rtc/sprd,sc2731-rtc.yaml#
+
+required:
+  - compatible
+  - interrupts
+  - interrupt-controller
+  - '#interrupt-cells'
+  - '#address-cells'
+  - '#size-cells'
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    pmic: pmic {
+        compatible = "sprd,sc2723-adi-pmic";
+        interrupts = <GIC_SPI 38 IRQ_TYPE_LEVEL_HIGH>;
+        interrupt-controller;
+        #interrupt-cells = <2>;
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        rtc@80 {
+            compatible = "sprd,sc2731-rtc";
+            reg = <0x80>;
+            interrupt-parent = <&pmic>;
+            interrupts = <2 IRQ_TYPE_LEVEL_HIGH>;
+        };
+
+        gpio@100 {
+            compatible = "sprd,sc2731-eic";
+            reg = <0x100>;
+            interrupt-parent = <&pmic>;
+            interrupts = <5 IRQ_TYPE_LEVEL_HIGH>;
+            gpio-controller;
+            #gpio-cells = <2>;
+            interrupt-controller;
+            #interrupt-cells = <2>;
+        };
+
+        audio-codec@600 {
+            compatible = "sprd,sc2723-codec";
+            reg = <0x600>;
+            #sound-dai-cells = <0>;
+        };
+    };
+...
