@@ -38,6 +38,16 @@
 #define  SR200_RUN		0x30
 #define SR200_REG_ID		CCI_REG8(0x04)
 #define  SR200_ID		0xb4
+/* image adjustments, page 0x10 */
+#define SR200_PAGE_ISP		0x10
+#define SR200_REG_ISPCTL4	CCI_REG8(0x13)
+#define  SR200_CONTRAST_EN	0x02
+#define SR200_REG_YOFS		CCI_REG8(0x40)	/* brightness, sign-magnitude */
+#define SR200_REG_CONTRAST	CCI_REG8(0x48)	/* 0x80 = unchanged */
+#define SR200_REG_SATB		CCI_REG8(0x61)
+#define SR200_REG_SATR		CCI_REG8(0x62)
+/* Cb/Cr gain; the vendor tuning has 0x7b, which looks washed out */
+#define SR200_SATURATION_DEF	0x7b
 
 #define SR200_MCLK_HZ		24000000
 #define SR200_LANES		1
@@ -272,10 +282,13 @@ static int sr200_get_selection(struct v4l2_subdev *sd,
 	return -EINVAL;
 }
 
-/* tables written, sensor asleep: the lane idles in LP-11 */
-static int sr200_pre_streamon(struct v4l2_subdev *sd, u32 flags)
+/*
+ * Tables and controls written, sensor asleep: the lane idles in LP-11.
+ * Called with the control lock held, which also serializes the paged
+ * register writes against sr200_s_ctrl().
+ */
+static int sr200_prepare(struct sr200 *sr)
 {
-	struct sr200 *sr = to_sr200(sd);
 	int ret;
 
 	if (sr->prepared)
@@ -285,6 +298,8 @@ static int sr200_pre_streamon(struct v4l2_subdev *sd, u32 flags)
 		return ret;
 	ret = sr200_load_mode(sr);
 	if (!ret)
+		ret = __v4l2_ctrl_handler_setup(&sr->ctrls);
+	if (!ret)
 		ret = sr200_sleep(sr, true);
 	if (ret) {
 		pm_runtime_put(sr->dev);
@@ -292,6 +307,17 @@ static int sr200_pre_streamon(struct v4l2_subdev *sd, u32 flags)
 	}
 	sr->prepared = true;
 	return 0;
+}
+
+static int sr200_pre_streamon(struct v4l2_subdev *sd, u32 flags)
+{
+	struct sr200 *sr = to_sr200(sd);
+	int ret;
+
+	mutex_lock(sr->ctrls.lock);
+	ret = sr200_prepare(sr);
+	mutex_unlock(sr->ctrls.lock);
+	return ret;
 }
 
 static int sr200_post_streamoff(struct v4l2_subdev *sd)
@@ -313,7 +339,7 @@ static int sr200_enable_streams(struct v4l2_subdev *sd,
 	int ret;
 
 	/* receivers without pre_streamon get the tables now */
-	ret = sr200_pre_streamon(sd, 0);
+	ret = sr200_prepare(sr);
 	if (!ret)
 		ret = sr200_sleep(sr, false);
 	return ret;
@@ -328,8 +354,41 @@ static int sr200_disable_streams(struct v4l2_subdev *sd,
 
 static int sr200_s_ctrl(struct v4l2_ctrl *ctrl)
 {
-	/* link frequency and pixel rate follow the mode */
-	return 0;
+	struct sr200 *sr = container_of(ctrl->handler, struct sr200, ctrls);
+	int ret = 0;
+
+	switch (ctrl->id) {
+	case V4L2_CID_BRIGHTNESS:
+	case V4L2_CID_CONTRAST:
+	case V4L2_CID_SATURATION:
+		break;
+	default:
+		/* link frequency and pixel rate follow the mode */
+		return 0;
+	}
+
+	/* powered off, the tables reset them: written on the next start */
+	if (!pm_runtime_get_if_in_use(sr->dev))
+		return 0;
+
+	cci_write(sr->regmap, SR200_REG_PAGE, SR200_PAGE_ISP, &ret);
+	switch (ctrl->id) {
+	case V4L2_CID_BRIGHTNESS:
+		cci_write(sr->regmap, SR200_REG_YOFS, ctrl->val < 0 ?
+			  0x80 | -ctrl->val : ctrl->val, &ret);
+		break;
+	case V4L2_CID_CONTRAST:
+		cci_write(sr->regmap, SR200_REG_ISPCTL4, SR200_CONTRAST_EN, &ret);
+		cci_write(sr->regmap, SR200_REG_CONTRAST, ctrl->val, &ret);
+		break;
+	case V4L2_CID_SATURATION:
+		cci_write(sr->regmap, SR200_REG_SATB, ctrl->val, &ret);
+		cci_write(sr->regmap, SR200_REG_SATR, ctrl->val, &ret);
+		break;
+	}
+
+	pm_runtime_put(sr->dev);
+	return ret;
 }
 
 static const struct v4l2_ctrl_ops sr200_ctrl_ops = {
@@ -367,7 +426,13 @@ static int sr200_init_controls(struct sr200 *sr)
 	struct v4l2_fwnode_device_properties props;
 	int ret;
 
-	v4l2_ctrl_handler_init(hdl, 4);
+	v4l2_ctrl_handler_init(hdl, 7);
+	v4l2_ctrl_new_std(hdl, &sr200_ctrl_ops, V4L2_CID_BRIGHTNESS,
+			  -127, 127, 1, 0);
+	v4l2_ctrl_new_std(hdl, &sr200_ctrl_ops, V4L2_CID_CONTRAST,
+			  0, 255, 1, 0x80);
+	v4l2_ctrl_new_std(hdl, &sr200_ctrl_ops, V4L2_CID_SATURATION,
+			  0, 255, 1, SR200_SATURATION_DEF);
 	sr->link_freq = v4l2_ctrl_new_int_menu(hdl, &sr200_ctrl_ops,
 					       V4L2_CID_LINK_FREQ,
 					       ARRAY_SIZE(sr200_link_freqs) - 1,
