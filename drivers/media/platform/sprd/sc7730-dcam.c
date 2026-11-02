@@ -5,8 +5,9 @@
  * engine, used here as a plain receiver for sensors with their own ISP.
  *
  * DCAM path 1 writes the captured YUV422 with the scaler bypassed as a Y
- * plane plus an interleaved CbCr plane (NV16); it has no line pitch, so
- * lines are packed and the CbCr plane starts at width * height. Frame
+ * plane plus an interleaved CbCr plane, 4:2:0 (NV12) or 4:2:2 (NV16); it
+ * has no line pitch, so lines are packed and the CbCr plane starts at
+ * width * height. Frame
  * addresses are shadowed: written at the path's start of frame they latch
  * at the next one (auto copy), as in the vendor driver. A scratch buffer
  * takes frames for which user space has queued nothing.
@@ -54,6 +55,7 @@
 #define  CTL_PATH1_AUTO_COPY	BIT(11)
 #define  CTL_PATH1_COEF_FORCE	BIT(14)
 #define PATH1_CFG		0x10
+#define  P1_OUT_FMT		GENMASK(7, 6)	/* 0 YUV422, 1 YUV420, 2-plane */
 #define  P1_SCALER_BYPASS	BIT(20)
 #define PATH1_SRC_SIZE		0x14
 #define PATH1_DST_SIZE		0x18
@@ -443,7 +445,9 @@ static void dcam_hw_start(struct dcam *d)
 	writel(0, d->base + PATH1_TRIM_START);
 	writel(size, d->base + PATH1_TRIM_SIZE);
 	writel(size, d->base + PATH1_DST_SIZE);
-	writel(P1_SCALER_BYPASS, d->base + PATH1_CFG);	/* YUV422 2-plane */
+	writel(P1_SCALER_BYPASS |
+	       FIELD_PREP(P1_OUT_FMT, d->fmt.pixelformat == V4L2_PIX_FMT_NV12),
+	       d->base + PATH1_CFG);
 	dcam_rmw(d->base + ENDIAN_SEL, 0, ENDIAN_P1_LITTLE | ENDIAN_AXI);
 
 	spin_lock_irqsave(&d->qlock, flags);
@@ -724,14 +728,36 @@ static const struct vb2_ops dcam_vb2_ops = {
 
 /* --- video node -------------------------------------------------------- */
 
+/*
+ * path1 output: Y plane plus CbCr plane, 4:2:0 or 4:2:2. With the scaler
+ * bypassed the vendor only uses 4:2:2; 4:2:0 works as well (the DMA
+ * writes exactly w * h * 3 / 2 bytes) and is what most user space
+ * handles (GStreamer's videocrop in camerabin knows no NV16), so it
+ * comes first.
+ */
+static const u32 dcam_formats[] = { V4L2_PIX_FMT_NV12, V4L2_PIX_FMT_NV16 };
+
+static bool dcam_format_valid(u32 pixelformat)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(dcam_formats); i++)
+		if (dcam_formats[i] == pixelformat)
+			return true;
+	return false;
+}
+
 static void dcam_fill_fmt(struct v4l2_pix_format *f)
 {
-	f->pixelformat = V4L2_PIX_FMT_NV16;
+	if (!dcam_format_valid(f->pixelformat))
+		f->pixelformat = dcam_formats[0];
 	f->width = clamp(ALIGN(f->width, 4), 16U, (u32)DCAM_MAX_WIDTH);
 	f->height = clamp(ALIGN(f->height, 2), 16U, (u32)DCAM_MAX_HEIGHT);
 	f->field = V4L2_FIELD_NONE;
 	f->bytesperline = f->width;
-	f->sizeimage = f->width * f->height * 2;
+	f->sizeimage = f->width * f->height;
+	f->sizeimage += f->pixelformat == V4L2_PIX_FMT_NV12 ? f->sizeimage / 2 :
+							       f->sizeimage;
 	f->colorspace = V4L2_COLORSPACE_SRGB;
 	f->ycbcr_enc = V4L2_YCBCR_ENC_601;
 	f->quantization = V4L2_QUANTIZATION_LIM_RANGE;
@@ -749,16 +775,17 @@ static int dcam_querycap(struct file *file, void *priv,
 static int dcam_enum_fmt(struct file *file, void *priv,
 			 struct v4l2_fmtdesc *f)
 {
-	if (f->index || (f->mbus_code && f->mbus_code != MEDIA_BUS_FMT_UYVY8_1X16))
+	if (f->index >= ARRAY_SIZE(dcam_formats) ||
+	    (f->mbus_code && f->mbus_code != MEDIA_BUS_FMT_UYVY8_1X16))
 		return -EINVAL;
-	f->pixelformat = V4L2_PIX_FMT_NV16;
+	f->pixelformat = dcam_formats[f->index];
 	return 0;
 }
 
 static int dcam_enum_framesizes(struct file *file, void *priv,
 				struct v4l2_frmsizeenum *fsize)
 {
-	if (fsize->index || fsize->pixel_format != V4L2_PIX_FMT_NV16)
+	if (fsize->index || !dcam_format_valid(fsize->pixel_format))
 		return -EINVAL;
 	/* as dcam_fill_fmt() aligns them */
 	fsize->type = V4L2_FRMSIZE_TYPE_STEPWISE;
