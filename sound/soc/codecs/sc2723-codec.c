@@ -283,6 +283,7 @@ static const struct snd_soc_component_driver sc2723_codec_driver = {
 	.dapm_routes = sc2723_dapm_routes,
 	.num_dapm_routes = ARRAY_SIZE(sc2723_dapm_routes),
 	.idle_bias_on = false,
+	.use_pmdown_time = true,
 	.endianness = 1,
 };
 
