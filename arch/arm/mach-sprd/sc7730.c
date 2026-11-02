@@ -20,6 +20,12 @@
  * fires, and an idle CPU only wakes for some other interrupt (100 sleeps
  * of 10 ms took 124 s). Keep the core clocks running in WFI; the vendor
  * kernel does the same on some scx35 revisions.
+ *
+ * Suspend to "mem" is the vendor's standby for now: the PM core takes
+ * CPU1-3 offline, which powers them down (platsmp.c), and CPU0 waits in
+ * WFI for a wakeup interrupt. DDR, the GIC and the counter stay powered.
+ * The vendor's deep sleep (DDR self-refresh, CA7 power-down, resume from
+ * IRAM) is not there yet.
  */
 
 #include <linux/bits.h>
@@ -28,8 +34,10 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/printk.h>
+#include <linux/suspend.h>
 
 #include <asm/mach/arch.h>
+#include <asm/proc-fns.h>
 
 #include "sc7730.h"
 
@@ -92,6 +100,39 @@ static void __init sc7730_init_time(void)
 	timer_probe();
 }
 
+#ifdef CONFIG_SUSPEND
+static int sc7730_suspend_enter(suspend_state_t state)
+{
+	cpu_do_idle();
+	return 0;
+}
+
+/*
+ * WFI ends for any pending interrupt, also one that is not a wakeup
+ * source (a touch controller losing power toggles its line on the way
+ * down). Once the core has looked at it, after resuming as far as the
+ * early phase, sleep again unless it was a wakeup. Handling interrupts
+ * inside ->enter() instead, with timekeeping suspended, hung the resume.
+ */
+static bool sc7730_suspend_again(void)
+{
+	return !pm_wakeup_pending();
+}
+
+static const struct platform_suspend_ops sc7730_suspend_ops = {
+	.valid		= suspend_valid_only_mem,
+	.enter		= sc7730_suspend_enter,
+	.suspend_again	= sc7730_suspend_again,
+};
+
+static void __init sc7730_init_late(void)
+{
+	suspend_set_ops(&sc7730_suspend_ops);
+}
+#else
+#define sc7730_init_late	NULL
+#endif
+
 static const char *const sc7730_dt_compat[] __initconst = {
 	"sprd,sc7730",
 	NULL
@@ -100,4 +141,5 @@ static const char *const sc7730_dt_compat[] __initconst = {
 DT_MACHINE_START(SPRD_SC7730, "Spreadtrum SC7730")
 	.dt_compat	= sc7730_dt_compat,
 	.init_time	= sc7730_init_time,
+	.init_late	= sc7730_init_late,
 MACHINE_END
