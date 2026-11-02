@@ -312,6 +312,27 @@
 		regulator-max-microvolt = <3000000>;
 	};
 
+	/* SC2723 camera LDOs: analog 2.8 V and I/O 1.8 V for both sensors */
+	vddcama: regulator-vddcama {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddcama";
+		sprd,pd-reg = <0x814 4>;
+		sprd,vsel-reg = <0x830 0xff>;
+		regulator-min-microvolt = <2800000>;
+		regulator-max-microvolt = <2800000>;
+	};
+
+	vddcamio: regulator-vddcamio {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddcamio";
+		sprd,pd-reg = <0x814 6>;
+		sprd,vsel-reg = <0x81c 0x7f00>;
+		sprd,min-microvolt = <1150000>;
+		sprd,step-microvolt = <6250>;
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+	};
+
 	backlight: backlight {
 		compatible = "pwm-backlight";
 		pwms = <&pwm 3 49039>;
@@ -331,11 +352,41 @@
 };
 
 /*
- * Camera sensors: rear S5K4ECGX @ 0x56, front SR200PC20M @ 0x20. No
- * drivers yet, the bus is for bring-up from user space (buildkit/camprobe.c).
+ * Camera sensors: rear S5K4ECGX @ 0x56 (no driver yet), front SR200PC20M
+ * @ 0x20 on D-PHY C. The front does not need the external 1.2 V DVDD
+ * (GPIO 193) the vendor pulses.
  */
 &i2c0 {
 	status = "okay";
+
+	camera@20 {
+		compatible = "siliconfile,sr200pc20m";
+		reg = <0x20>;
+		clocks = <&dcam>;
+		avdd-supply = <&vddcama>;
+		dovdd-supply = <&vddcamio>;
+		reset-gpios = <&gpio 238 GPIO_ACTIVE_LOW>;
+		powerdown-gpios = <&gpio 187 GPIO_ACTIVE_LOW>;
+		orientation = <0>;
+
+		port {
+			front_camera_out: endpoint {
+				remote-endpoint = <&dcam_front_in>;
+				data-lanes = <1>;
+			};
+		};
+	};
+};
+
+&dcam {
+	status = "okay";
+};
+
+&dcam_phy_c {
+	dcam_front_in: endpoint {
+		remote-endpoint = <&front_camera_out>;
+		data-lanes = <1>;
+	};
 };
 
 /*

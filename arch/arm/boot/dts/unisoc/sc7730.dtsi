@@ -409,6 +409,37 @@
 			status = "disabled";
 		};
 
+		/*
+		 * Camera: DCAM capture engine and the CSI-2 host (DesignWare
+		 * 1.03). Port 0 is D-PHY A (2 lanes), port 1 D-PHY C (1 lane).
+		 * MM AHB, MM clocks and AON_APB are shared registers; the block
+		 * also provides the sensor master clock (24 MHz).
+		 */
+		dcam: camera@60800000 {
+			compatible = "sprd,sc7730-dcam";
+			reg = <0x60800000 0x1000>, <0x60c00000 0x1000>,
+			      <0x60d00000 0x100>, <0x60e00000 0x100>,
+			      <0x402e0000 0x100>;
+			reg-names = "dcam", "csi", "mm-ahb", "mm-clk", "aon-apb";
+			interrupts = <GIC_SPI 45 IRQ_TYPE_LEVEL_HIGH>;
+			power-domains = <&pmu_domains 1>;
+			#clock-cells = <0>;
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				dcam_phy_a: port@0 {
+					reg = <0>;
+				};
+
+				dcam_phy_c: port@1 {
+					reg = <1>;
+				};
+			};
+		};
+
 		gic: interrupt-controller@12001000 {
 			compatible = "arm,cortex-a7-gic";
 			#interrupt-cells = <3>;
