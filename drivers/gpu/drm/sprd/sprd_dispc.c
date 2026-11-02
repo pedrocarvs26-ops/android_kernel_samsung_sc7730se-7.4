@@ -329,12 +329,17 @@ static void sprd_dispc_crtc_atomic_flush(struct drm_crtc *crtc,
 			 msecs_to_jiffies(FLIP_TIMEOUT_MS));
 }
 
-/* DISPC never stops: an active CRTC always needs a buffer to show */
+/*
+ * An enabled CRTC always needs a buffer to show (DISPC keeps scanning
+ * out); disabling all of it, as suspend and shutdown do, needs none.
+ */
 static int sprd_dispc_crtc_atomic_check(struct drm_crtc *crtc,
 					struct drm_atomic_commit *state)
 {
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
 
+	if (!crtc_state->enable)
+		return 0;
 	return drm_atomic_helper_check_crtc_primary_plane(crtc_state);
 }
 
