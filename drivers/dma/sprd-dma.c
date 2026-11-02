@@ -17,6 +17,7 @@
 #include <linux/of_dma.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/property.h>
 #include <linux/slab.h>
 
 #include "virt-dma.h"
@@ -87,6 +88,8 @@
 #define SPRD_DMA_LINKLIST_EN		BIT(4)
 #define SPRD_DMA_WAIT_BDONE_OFFSET	24
 #define SPRD_DMA_DONOT_WAIT_BDONE	1
+/* r4p0 (SC7730): no WAIT_BDONE bit, priority 1 as the vendor driver */
+#define SPRD_DMA_R4P0_CFG		BIT(12)
 
 /* SPRD_DMA_CHN_REQ register definition */
 #define SPRD_DMA_REQ_EN			BIT(0)
@@ -204,12 +207,25 @@ struct sprd_dma_chn {
 	struct sprd_dma_desc	*cur_desc;
 };
 
+/*
+ * Variant data. On the SC7730 (DMA r4p0) only channels 24-31 are "full"
+ * channels with the transaction, linklist and step registers this driver
+ * always programs, and the pause acknowledge is bit 16.
+ */
+struct sprd_dma_data {
+	u32			first_chn;
+	u32			pause_sts;
+	bool			r4p0;	/* no 8-byte width, no WAIT_BDONE, no REQ_PEND */
+};
+
 /* SPRD dma device */
 struct sprd_dma_dev {
 	struct dma_device	dma_dev;
 	void __iomem		*glb_base;
 	struct clk_bulk_data	clks[2];
 	int			irq;
+	u32			pause_sts;
+	bool			r4p0;
 	u32			total_chns;
 	struct sprd_dma_chn	channels[] __counted_by(total_chns);
 };
@@ -229,7 +245,12 @@ static inline struct sprd_dma_dev *to_sprd_dma_dev(struct dma_chan *c)
 {
 	struct sprd_dma_chn *schan = to_sprd_dma_chan(c);
 
-	return container_of(schan, struct sprd_dma_dev, channels[c->chan_id]);
+	/*
+	 * Not c->chan_id: dmaengine numbers only the channels that are left
+	 * on the list, which is not the hardware index when a variant hides
+	 * the first channels.
+	 */
+	return container_of(schan, struct sprd_dma_dev, channels[schan->chn_num]);
 }
 
 static inline struct sprd_dma_desc *to_sprd_dma_desc(struct virt_dma_desc *vd)
@@ -328,7 +349,7 @@ static void sprd_dma_pause_resume(struct sprd_dma_chn *schan, bool enable)
 
 		do {
 			pause = readl(schan->chn_base + SPRD_DMA_CHN_PAUSE);
-			if (pause & SPRD_DMA_PAUSE_STS)
+			if (pause & sdev->pause_sts)
 				break;
 
 			cpu_relax();
@@ -471,7 +492,7 @@ static void sprd_dma_set_pending(struct sprd_dma_chn *schan, bool enable)
 	struct sprd_dma_dev *sdev = to_sprd_dma_dev(&schan->vc.chan);
 	u32 reg, val, req_id;
 
-	if (schan->dev_id == SPRD_DMA_SOFTWARE_UID)
+	if (schan->dev_id == SPRD_DMA_SOFTWARE_UID || sdev->r4p0)
 		return;
 
 	/* The DMA request id always starts from 0. */
@@ -584,8 +605,10 @@ static irqreturn_t dma_irq_handle(int irq, void *dev_id)
 
 		sdesc = schan->cur_desc;
 		if (!sdesc) {
+			/* a level interrupt left raised would storm */
+			sprd_dma_clear_int(schan);
 			spin_unlock(&schan->vc.lock);
-			return IRQ_HANDLED;
+			continue;
 		}
 
 		int_type = sprd_dma_get_int_type(schan);
@@ -773,7 +796,8 @@ static int sprd_dma_fill_desc(struct dma_chan *chan,
 		return dst_datawidth;
 	}
 
-	hw->cfg = SPRD_DMA_DONOT_WAIT_BDONE << SPRD_DMA_WAIT_BDONE_OFFSET;
+	hw->cfg = sdev->r4p0 ? SPRD_DMA_R4P0_CFG :
+		  SPRD_DMA_DONOT_WAIT_BDONE << SPRD_DMA_WAIT_BDONE_OFFSET;
 
 	/*
 	 * wrap_ptr and wrap_to will save the high 4 bits source address and
@@ -876,9 +900,11 @@ sprd_dma_prep_dma_memcpy(struct dma_chan *chan, dma_addr_t dest, dma_addr_t src,
 			 size_t len, unsigned long flags)
 {
 	struct sprd_dma_chn *schan = to_sprd_dma_chan(chan);
+	struct sprd_dma_dev *sdev = to_sprd_dma_dev(chan);
 	struct sprd_dma_desc *sdesc;
 	struct sprd_dma_chn_hw *hw;
 	enum sprd_dma_datawidth datawidth;
+	u64 len_align = len;
 	u32 step, temp;
 
 	sdesc = kzalloc_obj(*sdesc, GFP_NOWAIT);
@@ -887,7 +913,8 @@ sprd_dma_prep_dma_memcpy(struct dma_chan *chan, dma_addr_t dest, dma_addr_t src,
 
 	hw = &sdesc->chn_hw;
 
-	hw->cfg = SPRD_DMA_DONOT_WAIT_BDONE << SPRD_DMA_WAIT_BDONE_OFFSET;
+	hw->cfg = sdev->r4p0 ? SPRD_DMA_R4P0_CFG :
+		  SPRD_DMA_DONOT_WAIT_BDONE << SPRD_DMA_WAIT_BDONE_OFFSET;
 	hw->intc = SPRD_DMA_TRANS_INT | SPRD_DMA_CFG_ERR_INT_EN;
 	hw->src_addr = src & SPRD_DMA_LOW_ADDR_MASK;
 	hw->des_addr = dest & SPRD_DMA_LOW_ADDR_MASK;
@@ -896,13 +923,15 @@ sprd_dma_prep_dma_memcpy(struct dma_chan *chan, dma_addr_t dest, dma_addr_t src,
 	hw->wrap_to = (dest >> SPRD_DMA_HIGH_ADDR_OFFSET) &
 		SPRD_DMA_HIGH_ADDR_MASK;
 
-	if (IS_ALIGNED(len, 8)) {
+	if (sdev->r4p0)
+		len_align = len | src | dest;	/* r4p0 knows 1, 2 and 4 bytes */
+	if (IS_ALIGNED(len_align, 8) && !sdev->r4p0) {
 		datawidth = SPRD_DMA_DATAWIDTH_8_BYTES;
 		step = SPRD_DMA_DWORD_STEP;
-	} else if (IS_ALIGNED(len, 4)) {
+	} else if (IS_ALIGNED(len_align, 4)) {
 		datawidth = SPRD_DMA_DATAWIDTH_4_BYTES;
 		step = SPRD_DMA_WORD_STEP;
-	} else if (IS_ALIGNED(len, 2)) {
+	} else if (IS_ALIGNED(len_align, 2)) {
 		datawidth = SPRD_DMA_DATAWIDTH_2_BYTES;
 		step = SPRD_DMA_SHORT_STEP;
 	} else {
@@ -1087,13 +1116,29 @@ static bool sprd_dma_filter_fn(struct dma_chan *chan, void *param)
 	return true;
 }
 
+static const struct sprd_dma_data sc9860_dma_data = {
+	.first_chn = 0,
+	.pause_sts = SPRD_DMA_PAUSE_STS,
+};
+
+static const struct sprd_dma_data sc7730_dma_data = {
+	.first_chn = 24,
+	.pause_sts = BIT(16),
+	.r4p0 = true,
+};
+
 static int sprd_dma_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
+	const struct sprd_dma_data *data;
 	struct sprd_dma_dev *sdev;
 	struct sprd_dma_chn *dma_chn;
 	u32 chn_count;
 	int ret, i;
+
+	data = device_get_match_data(&pdev->dev);
+	if (!data)
+		data = &sc9860_dma_data;
 
 	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(36));
 	if (ret) {
@@ -1139,8 +1184,9 @@ static int sprd_dma_probe(struct platform_device *pdev)
 	 */
 	sdev->irq = platform_get_irq(pdev, 0);
 	if (sdev->irq > 0) {
+		/* the handler reads the block, which is gated until enabled */
 		ret = devm_request_irq(&pdev->dev, sdev->irq, dma_irq_handle,
-				       0, "sprd_dma", (void *)sdev);
+				       IRQF_NO_AUTOEN, "sprd_dma", (void *)sdev);
 		if (ret < 0) {
 			dev_err(&pdev->dev, "request dma irq failed\n");
 			return ret;
@@ -1155,6 +1201,10 @@ static int sprd_dma_probe(struct platform_device *pdev)
 
 	dma_cap_set(DMA_MEMCPY, sdev->dma_dev.cap_mask);
 	sdev->total_chns = chn_count;
+	sdev->pause_sts = data->pause_sts;
+	sdev->r4p0 = data->r4p0;
+	if (sdev->r4p0)
+		sdev->dma_dev.copy_align = DMAENGINE_ALIGN_4_BYTES;
 	INIT_LIST_HEAD(&sdev->dma_dev.channels);
 	INIT_LIST_HEAD(&sdev->dma_dev.global_node);
 	sdev->dma_dev.dev = &pdev->dev;
@@ -1179,12 +1229,17 @@ static int sprd_dma_probe(struct platform_device *pdev)
 
 		dma_chn->vc.desc_free = sprd_dma_free_desc;
 		vchan_init(&dma_chn->vc, &sdev->dma_dev);
+		/* initialised for the IRQ handler, but never handed out */
+		if (i < data->first_chn)
+			list_del(&dma_chn->vc.chan.device_node);
 	}
 
 	platform_set_drvdata(pdev, sdev);
 	ret = sprd_dma_enable(sdev);
 	if (ret)
 		return ret;
+	if (sdev->irq > 0)
+		enable_irq(sdev->irq);
 
 	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
@@ -1243,7 +1298,8 @@ static void sprd_dma_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id sprd_dma_match[] = {
-	{ .compatible = "sprd,sc9860-dma", },
+	{ .compatible = "sprd,sc7730-dma", .data = &sc7730_dma_data },
+	{ .compatible = "sprd,sc9860-dma", .data = &sc9860_dma_data },
 	{},
 };
 MODULE_DEVICE_TABLE(of, sprd_dma_match);
@@ -1252,6 +1308,9 @@ static int __maybe_unused sprd_dma_runtime_suspend(struct device *dev)
 {
 	struct sprd_dma_dev *sdev = dev_get_drvdata(dev);
 
+	/* the handler must not read the block once it is gated */
+	if (sdev->irq > 0)
+		disable_irq(sdev->irq);
 	sprd_dma_disable(sdev);
 	return 0;
 }
@@ -1264,6 +1323,8 @@ static int __maybe_unused sprd_dma_runtime_resume(struct device *dev)
 	ret = sprd_dma_enable(sdev);
 	if (ret)
 		dev_err(sdev->dma_dev.dev, "enable dma failed\n");
+	else if (sdev->irq > 0)
+		enable_irq(sdev->irq);
 
 	return ret;
 }
