@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/pm_wakeirq.h>
 #include <linux/regmap.h>
 #include <linux/rtc.h>
 
@@ -614,6 +615,17 @@ static int sprd_rtc_probe(struct platform_device *pdev)
 	}
 
 	device_init_wakeup(&pdev->dev, true);
+
+	/*
+	 * The alarm reaches the CPU through the PMIC interrupt controller,
+	 * which disables (masks) every interrupt that is not a wakeup source
+	 * during suspend. Keep it enabled when the RTC may wake the system.
+	 */
+	ret = devm_pm_set_wake_irq(&pdev->dev, rtc->irq);
+	if (ret) {
+		device_init_wakeup(&pdev->dev, false);
+		return ret;
+	}
 
 	rtc->rtc->ops = &sprd_rtc_ops;
 	rtc->rtc->range_min = 0;
