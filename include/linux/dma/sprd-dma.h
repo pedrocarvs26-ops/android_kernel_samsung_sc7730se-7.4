@@ -187,4 +187,19 @@ struct sprd_dma_linklist {
 	phys_addr_t wrap_addr;
 };
 
+/**
+ * struct sprd_dma_step - address steps other than the data width, passed
+ * as dma_slave_config.peripheral_config
+ * @src_step: bytes the source address advances per datum, 0 for the default
+ * @dst_step: bytes the destination address advances per datum, 0 for the
+ * default
+ *
+ * Interleaved audio uses one DMA channel per audio channel, each of which
+ * has to skip the samples of the other channels in memory.
+ */
+struct sprd_dma_step {
+	u32 src_step;
+	u32 dst_step;
+};
+
 #endif

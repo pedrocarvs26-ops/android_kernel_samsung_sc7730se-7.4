@@ -199,6 +199,7 @@ struct sprd_dma_chn {
 	void __iomem		*chn_base;
 	struct sprd_dma_linklist	linklist;
 	struct dma_slave_config	slave_cfg;
+	struct sprd_dma_step	step;
 	u32			chn_num;
 	u32			dev_id;
 	enum sprd_dma_chn_mode	chn_mode;
@@ -784,6 +785,11 @@ static int sprd_dma_fill_desc(struct dma_chan *chan,
 		src_step = SPRD_DMA_NONE_STEP;
 	}
 
+	if (schan->step.src_step)
+		src_step = schan->step.src_step;
+	if (schan->step.dst_step)
+		dst_step = schan->step.dst_step;
+
 	src_datawidth = sprd_dma_get_datawidth(slave_cfg->src_addr_width);
 	if (src_datawidth < 0) {
 		dev_err(sdev->dma_dev.dev, "invalid source datawidth\n");
@@ -1050,6 +1056,15 @@ static int sprd_dma_slave_config(struct dma_chan *chan,
 	struct dma_slave_config *slave_cfg = &schan->slave_cfg;
 
 	memcpy(slave_cfg, config, sizeof(*config));
+	/* only valid during the call, so keep a copy */
+	if (config->peripheral_config &&
+	    config->peripheral_size == sizeof(schan->step))
+		memcpy(&schan->step, config->peripheral_config,
+		       sizeof(schan->step));
+	else
+		memset(&schan->step, 0, sizeof(schan->step));
+	slave_cfg->peripheral_config = NULL;
+	slave_cfg->peripheral_size = 0;
 	return 0;
 }
 
