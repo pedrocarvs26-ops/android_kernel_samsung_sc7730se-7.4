@@ -53,13 +53,35 @@
 	};
 
 	/*
-	 * EIC block of the SC2723 companion PMIC behind the ADI bus, polled
-	 * (mach-sprd/pmic-eic.c) until there is an sc27xx MFD for it.
+	 * SC2723 companion PMIC behind the ADI bus, as a regmap with its
+	 * interrupt controller (mach-sprd/sc2723-pmic.c) until spi-sprd-adi
+	 * and the sc27xx MFD know it. Children use the mainline drivers.
 	 */
-	pmic_eic: gpio-controller {
-		compatible = "sprd,sc2723-eic-polled";
-		gpio-controller;
-		#gpio-cells = <2>;
+	pmic: pmic {
+		compatible = "sprd,sc2723-adi-pmic";
+		interrupts = <GIC_SPI 38 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		rtc@80 {
+			compatible = "sprd,sc2731-rtc";
+			reg = <0x80>;
+			interrupt-parent = <&pmic>;
+			interrupts = <2 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		pmic_eic: gpio@100 {
+			compatible = "sprd,sc2731-eic";
+			reg = <0x100>;
+			interrupt-parent = <&pmic>;
+			interrupts = <5 IRQ_TYPE_LEVEL_HIGH>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
 	};
 
 	/* SC2723 auxiliary ADC (mach-sprd/sc2723-adc.c), raw counts */

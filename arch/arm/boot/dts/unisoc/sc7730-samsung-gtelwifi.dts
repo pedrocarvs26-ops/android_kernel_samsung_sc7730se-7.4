@@ -67,22 +67,25 @@
 	/*
 	 * Power (PBINT) and Volume Down (EXT_RSTN) are PMIC inputs, not part
 	 * of the keypad matrix. Power + Volume Down held for ~7-10 s is a
-	 * hardware reset in the PMIC, independent of the kernel.
+	 * hardware reset in the PMIC, independent of the kernel. The EIC
+	 * debounces in hardware, 50 ms as the bootloader sets it.
 	 */
 	gpio-keys {
-		compatible = "gpio-keys-polled";
-		poll-interval = <50>;
+		compatible = "gpio-keys";
 
 		key-power {
 			label = "Power";
 			gpios = <&pmic_eic 2 GPIO_ACTIVE_HIGH>;
 			linux,code = <KEY_POWER>;
+			debounce-interval = <50>;
+			wakeup-source;
 		};
 
 		key-volume-down {
 			label = "Volume Down";
 			gpios = <&pmic_eic 10 GPIO_ACTIVE_HIGH>;
 			linux,code = <KEY_VOLUMEDOWN>;
+			debounce-interval = <50>;
 		};
 	};
 
@@ -356,6 +359,8 @@
 	keypad,num-columns = <3>;
 	linux,keymap = <MATRIX_KEY(0, 1, KEY_HOMEPAGE)
 			MATRIX_KEY(0, 2, KEY_VOLUMEUP)>;
+	/* Home wakes the tablet like on Android; Volume Up comes along */
+	wakeup-source;
 	status = "okay";
 };
 
