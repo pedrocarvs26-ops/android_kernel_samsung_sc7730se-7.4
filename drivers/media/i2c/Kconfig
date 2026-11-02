@@ -879,6 +879,23 @@ config VIDEO_S5KJN5
 	  To compile this driver as a module, choose M here: the
 	  module will be called s5kjn5.
 
+config VIDEO_SR200PC20M
+	tristate "SiliconFile SR200PC20M sensor support"
+	depends on OF && GPIOLIB && VIDEO_DEV
+	select FW_LOADER
+	select MEDIA_CONTROLLER
+	select V4L2_CCI_I2C
+	select V4L2_FWNODE
+	select VIDEO_V4L2_SUBDEV_API
+	help
+	  This is a V4L2 sensor driver for the SiliconFile SR200PC20M,
+	  a 2 MP sensor with an embedded image signal processor and a
+	  one-lane MIPI CSI-2 output. Its register tables are loaded as
+	  firmware.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called sr200pc20m.
+
 config VIDEO_T4KA3
 	tristate "Toshiba T4KA3 sensor support"
 	depends on ACPI || COMPILE_TEST
