@@ -378,9 +378,17 @@
 &uart0 {
 	status = "okay";
 
+	/*
+	 * BT_WAKE on GPIO 45, HOST_WAKE on GPIO 46 (vendor bcm-bt-lpm). hci_bcm
+	 * tells the controller BT_WAKE is active high and derives HOST_WAKE's
+	 * polarity from the interrupt type; the vendor ran both active low.
+	 */
 	bluetooth {
 		compatible = "brcm,bcm43430a1-bt";
 		shutdown-gpios = <&gpio 47 GPIO_ACTIVE_HIGH>;
+		device-wakeup-gpios = <&gpio 45 GPIO_ACTIVE_HIGH>;
+		interrupts-extended = <&gpio 46 IRQ_TYPE_EDGE_FALLING>;
+		interrupt-names = "host-wakeup";
 		clocks = <&clk_aux0>;
 		clock-names = "lpo";
 		max-speed = <2000000>;
@@ -451,9 +459,12 @@
 	mmc-pwrseq = <&wifi_pwrseq>;
 	status = "okay";
 
+	/* out-of-band host wake on GPIO 148, level high as in the vendor tree */
 	wifi@1 {
 		compatible = "brcm,bcm43430a1-fmac", "brcm,bcm4329-fmac";
 		reg = <1>;
+		interrupts-extended = <&gpio 148 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "host-wake";
 	};
 };
 
