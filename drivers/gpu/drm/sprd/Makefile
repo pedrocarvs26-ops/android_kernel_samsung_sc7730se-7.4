@@ -6,3 +6,4 @@ sprd-drm-y := sprd_drm.o \
 	megacores_pll.o
 
 obj-$(CONFIG_DRM_SPRD) += sprd-drm.o
+obj-$(CONFIG_DRM_SPRD_DISPC) += sprd_dispc.o
