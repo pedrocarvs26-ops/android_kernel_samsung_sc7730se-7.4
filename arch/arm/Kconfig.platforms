@@ -198,17 +198,6 @@ config SPRD_RESTART
 	  bootloader ("reboot recovery" boots the recovery partition) and
 	  lets the PMIC watchdog reset the system, as the vendor kernel does.
 
-config SPRD_PMIC_EIC
-	bool "SC2723 PMIC EIC inputs as polled GPIOs (bring-up glue)"
-	depends on ARCH_SPRD && GPIOLIB
-	select SPRD_ADI
-	help
-	  The power and volume down keys of SC7730 tablets hang off the
-	  EIC block of the SC2723 PMIC behind the ADI bus. This exposes
-	  its 16 inputs as a GPIO chip without interrupts, for
-	  gpio-keys-polled, until the mainline sc27xx drivers support
-	  the SC2723.
-
 config SPRD_CLK_AUX0
 	bool "SC7730 CLK_AUX0 32 kHz output (bring-up glue)"
 	depends on ARCH_SPRD && COMMON_CLK
@@ -233,6 +222,19 @@ config SPRD_SC2723_LDO
 	  LDOs of the SC2723 PMIC, one device tree node each, switched and
 	  set over the ADI bus: the microSD card supply, later the camera
 	  rails.
+
+config SPRD_SC2723_PMIC
+	bool "SC2723 PMIC regmap and interrupts (bring-up glue)"
+	depends on ARCH_SPRD && OF
+	select SPRD_ADI
+	select REGMAP
+	select REGMAP_IRQ
+	help
+	  The SC2723 PMIC as a regmap over the ADI bus, with its interrupt
+	  controller, for the mainline sc27xx RTC (RTC_DRV_SC27XX) and PMIC
+	  EIC (GPIO_PMIC_EIC_SPRD, power and volume down keys) drivers.
+	  Stand-in for spi-sprd-adi plus the sc27xx MFD, which do not know
+	  the SC7730/SC2723 yet.
 
 config SPRD_SC2723_ADC
 	bool "SC2723 PMIC auxiliary ADC (bring-up glue)"
