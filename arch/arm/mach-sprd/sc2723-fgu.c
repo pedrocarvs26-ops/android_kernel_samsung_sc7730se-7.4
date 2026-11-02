@@ -66,8 +66,15 @@
 
 #define FGU_CURT_ZERO		8192
 #define FGU_POLL_MS		30000
-/* a saved capacity this far from the OCV estimate is stale */
+/*
+ * A saved capacity this far from the OCV estimate is stale. The OCV curve
+ * is flat in the middle, where the estimate under load is rough, but steep
+ * near full and empty, where the estimate wins over a value saved before
+ * the battery charged without us (powered off or hung).
+ */
 #define FGU_SAVED_MAX_DIFF	25
+#define FGU_SAVED_MAX_DIFF_EDGE	10
+#define FGU_EDGE_SOC		10	/* below this or above 100 minus it */
 
 /* without eFuse data (vendor defaults): ADC counts at 4.2 V and 3.6 V */
 #define FGU_DEF_A42		2752
@@ -533,7 +540,7 @@ static int sc2723_fgu_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct power_supply_config cfg = {};
 	struct sc2723_fgu *fgu;
-	int volt, curt, uv, ua, ocv, soc, saved, ret;
+	int volt, curt, uv, ua, ocv, soc, saved, max_diff, ret;
 	u32 r_real = 20000;
 
 	fgu = devm_kzalloc(dev, sizeof(*fgu), GFP_KERNEL);
@@ -592,9 +599,11 @@ static int sc2723_fgu_probe(struct platform_device *pdev)
 	ocv = sc2723_fgu_ocv_uv(fgu, uv, ua);
 	soc = clamp(power_supply_batinfo_ocv2cap(fgu->info, ocv, 20), 0, 100);
 	fgu->soc = soc;
+	max_diff = soc < FGU_EDGE_SOC || soc > 100 - FGU_EDGE_SOC ?
+		   FGU_SAVED_MAX_DIFF_EDGE : FGU_SAVED_MAX_DIFF;
 	if (FIELD_GET(USER_AREA_TYPE, saved) == USER_AREA_TYPE_NORMAL &&
 	    FIELD_GET(USER_AREA_SOC, saved) <= 100 &&
-	    abs((int)FIELD_GET(USER_AREA_SOC, saved) - soc) <= FGU_SAVED_MAX_DIFF)
+	    abs((int)FIELD_GET(USER_AREA_SOC, saved) - soc) <= max_diff)
 		fgu->soc = FIELD_GET(USER_AREA_SOC, saved);
 	fgu->status = POWER_SUPPLY_STATUS_UNKNOWN;
 	sc2723_fgu_anchor(fgu, fgu->soc);
