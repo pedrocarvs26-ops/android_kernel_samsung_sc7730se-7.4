@@ -146,6 +146,22 @@
 		};
 
 		/*
+		 * Display controller. Its clocks and gates (AP_AHB EB bit 1,
+		 * AON_APB EB1 bit 11, AP_APB EB bit 18, AP_CLK 0x2c-0x34) are
+		 * set up by the bootloader and only read by the driver.
+		 */
+		dispc: display-controller@20800000 {
+			compatible = "sprd,sc7730-dispc";
+			reg = <0x20800000 0x1000>, <0x20d00000 0x4>,
+			      <0x402e0000 0x8>, <0x71300000 0x4>,
+			      <0x71200000 0x40>;
+			reg-names = "dispc", "ap-ahb", "aon-apb", "ap-apb",
+				    "ap-clk";
+			interrupts = <GIC_SPI 46 IRQ_TYPE_LEVEL_HIGH>;
+			status = "disabled";
+		};
+
+		/*
 		 * Mali-400 MP2, all units on one interrupt line. Its AXI enable
 		 * (AON_APB EB0 bit 27) is switched with the power domain.
 		 */

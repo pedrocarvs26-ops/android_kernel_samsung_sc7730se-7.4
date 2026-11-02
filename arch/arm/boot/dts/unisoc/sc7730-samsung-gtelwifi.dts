@@ -250,6 +250,19 @@
 			console-size = <0x40000>;
 			pmsg-size = <0x20000>;
 		};
+
+		/*
+		 * Scan-out and GPU buffers for DISPC, which has no IOMMU. Kept in
+		 * lowmem below the vendor's carve-outs, where all vendor display
+		 * buffers lived.
+		 */
+		linux,cma {
+			compatible = "shared-dma-pool";
+			reusable;
+			size = <0x4000000>;
+			alloc-ranges = <0x90000000 0xe000000>;
+			linux,cma-default;
+		};
 	};
 
 	/* Scan-out buffer left running by the bootloader (lcd_base=9ea44000) */
@@ -355,6 +368,18 @@
 };
 
 &gpu {
+	status = "okay";
+};
+
+/*
+ * Takes over the DSI video-mode pipeline the bootloader leaves running and
+ * sends simpledrm away; the backlight follows the CRTC as with simpledrm.
+ * Panel size from the vendor device tree.
+ */
+&dispc {
+	backlight = <&backlight>;
+	width-mm = <129>;
+	height-mm = <206>;
 	status = "okay";
 };
 
