@@ -8,6 +8,7 @@
 #include <linux/module.h>
 #include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
@@ -151,6 +152,7 @@ static void sprd_pcm_release_dma_channel(struct snd_pcm_substream *substream)
 		if (data->chan) {
 			dma_release_channel(data->chan);
 			data->chan = NULL;
+			data->desc = NULL;
 		}
 	}
 }
@@ -196,12 +198,8 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct sprd_pcm_dma_params *dma_params;
 	size_t totsize = params_buffer_bytes(params);
-	size_t period = params_period_bytes(params);
 	int channels = params_channels(params);
-	int is_playback = substream->stream == SNDRV_PCM_STREAM_PLAYBACK;
-	struct scatterlist *sg;
-	unsigned long flags;
-	int ret, i, j, sg_num;
+	int ret;
 
 	dma_params = snd_soc_dai_get_dma_data(snd_soc_rtd_to_cpu(rtd, 0), substream);
 	if (!dma_params) {
@@ -226,17 +224,40 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 	dma_private->interleaved = channels > 1 &&
 		(params_access(params) == SNDRV_PCM_ACCESS_RW_INTERLEAVED ||
 		 params_access(params) == SNDRV_PCM_ACCESS_MMAP_INTERLEAVED);
-	sg_num = totsize / period;
 	if (dma_private->interleaved)
 		dma_private->dma_addr_offset = params_physical_width(params) / 8;
 	else
 		dma_private->dma_addr_offset = totsize / channels;
 
-	sg = devm_kcalloc(component->dev, sg_num, sizeof(*sg), GFP_KERNEL);
-	if (!sg) {
-		ret = -ENOMEM;
-		goto sg_err;
-	}
+	return 0;
+}
+
+/*
+ * A descriptor is used up once it has been submitted: stopping the stream
+ * terminates and frees it. ALSA calls .prepare after hw_params and again
+ * after every stop or xrun, so a fresh descriptor is set up for each start.
+ */
+static int sprd_pcm_prepare(struct snd_soc_component *component,
+			    struct snd_pcm_substream *substream)
+{
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct sprd_pcm_dma_private *dma_private = runtime->private_data;
+	struct sprd_pcm_dma_params *dma_params = dma_private->params;
+	size_t totsize = frames_to_bytes(runtime, runtime->buffer_size);
+	size_t period = frames_to_bytes(runtime, runtime->period_size);
+	int channels = runtime->channels;
+	int is_playback = substream->stream == SNDRV_PCM_STREAM_PLAYBACK;
+	struct scatterlist *sg;
+	unsigned long flags;
+	int ret = 0, i, j, sg_num;
+
+	if (!dma_params)
+		return 0;
+
+	sg_num = totsize / period;
+	sg = kcalloc(sg_num, sizeof(*sg), GFP_KERNEL);
+	if (!sg)
+		return -ENOMEM;
 
 	for (i = 0; i < channels; i++) {
 		struct sprd_pcm_dma_data *data = &dma_private->data[i];
@@ -246,6 +267,13 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 		struct sprd_dma_step step = { };
 		enum dma_transfer_direction dir;
 		struct scatterlist *sgt = sg;
+
+		if (!chan)
+			continue;
+
+		/* frees the previous run's descriptor, waits for its callback */
+		dmaengine_terminate_sync(chan);
+		data->desc = NULL;
 
 		config.src_maxburst = dma_params->fragment_len[i];
 		config.src_addr_width = dma_params->datawidth[i];
@@ -294,7 +322,7 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 		if (ret) {
 			dev_err(component->dev,
 				"failed to set slave configuration: %d\n", ret);
-			goto config_err;
+			break;
 		}
 
 		/*
@@ -309,7 +337,7 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 		if (!data->desc) {
 			dev_err(component->dev, "failed to prepare slave sg\n");
 			ret = -ENOMEM;
-			goto config_err;
+			break;
 		}
 
 		if (!runtime->no_period_wakeup) {
@@ -318,14 +346,8 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 		}
 	}
 
-	devm_kfree(component->dev, sg);
+	kfree(sg);
 
-	return 0;
-
-config_err:
-	devm_kfree(component->dev, sg);
-sg_err:
-	sprd_pcm_release_dma_channel(substream);
 	return ret;
 }
 
@@ -361,6 +383,8 @@ static int sprd_pcm_trigger(struct snd_soc_component *component,
 				return ret;
 			}
 
+			/* owned by the DMA engine now, freed on stop */
+			data->desc = NULL;
 			dma_async_issue_pending(data->chan);
 		}
 
@@ -480,6 +504,7 @@ static const struct snd_soc_component_driver sprd_soc_component = {
 	.close		= sprd_pcm_close,
 	.hw_params	= sprd_pcm_hw_params,
 	.hw_free	= sprd_pcm_hw_free,
+	.prepare	= sprd_pcm_prepare,
 	.trigger	= sprd_pcm_trigger,
 	.pointer	= sprd_pcm_pointer,
 	.pcm_new	= sprd_pcm_new,
