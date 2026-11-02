@@ -73,8 +73,16 @@
 	sound {
 		compatible = "simple-audio-card";
 		simple-audio-card,name = "gtelwifi";
-		simple-audio-card,widgets = "Speaker", "Speaker";
-		simple-audio-card,routing = "Speaker", "SPK";
+		simple-audio-card,widgets = "Speaker", "Speaker",
+					    "Headphone", "Headphones",
+					    "Microphone", "Internal Mic";
+		simple-audio-card,routing = "Speaker", "SPK",
+					    "Headphones", "HPOL",
+					    "Headphones", "HPOR",
+					    "MIC", "Internal Mic";
+		simple-audio-card,pin-switches = "Speaker", "Headphones";
+		/* jack switch, low with a plug in (vendor headset detect) */
+		simple-audio-card,hp-det-gpios = <&gpio 237 GPIO_ACTIVE_LOW>;
 
 		simple-audio-card,cpu {
 			sound-dai = <&vbc>;
