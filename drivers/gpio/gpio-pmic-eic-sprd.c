@@ -57,7 +57,7 @@ struct sprd_pmic_eic {
 	struct gpio_chip chip;
 	struct regmap *map;
 	u32 offset;
-	u8 reg[CACHE_NR_REGS];
+	u16 reg[CACHE_NR_REGS];
 	struct mutex buslock;
 	int irq;
 };
