@@ -17,4 +17,13 @@ config SND_SOC_SPRD_MCDT
 	  is used for sound stream transmission between audio subsystem
 	  and other AP/CP subsystem.
 
+config SND_SOC_SPRD_VBC_SC7730
+	tristate "Spreadtrum SC7730/SC8830 VBC CPU DAI"
+	depends on SND_SOC_SPRD && OF
+	help
+	  The voice band codec (VBC r2p0) and the digital DAC part of the
+	  32-bit Spreadtrum "shark" SoCs as a CPU DAI, fed by the AP DMA
+	  through the Spreadtrum PCM platform. Used with the analog codec
+	  in the SC2723 PMIC.
+
 endmenu
