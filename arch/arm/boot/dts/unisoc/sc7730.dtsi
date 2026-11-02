@@ -72,6 +72,14 @@
 			interrupts = <2 IRQ_TYPE_LEVEL_HIGH>;
 		};
 
+		/* analog audio codec, mono speaker path (sound/soc/codecs/sc2723-codec.c) */
+		sc2723_codec: audio-codec@600 {
+			compatible = "sprd,sc2723-codec";
+			reg = <0x600>;
+			#sound-dai-cells = <0>;
+			status = "disabled";
+		};
+
 		pmic_eic: gpio@100 {
 			compatible = "sprd,sc2731-eic";
 			reg = <0x100>;
@@ -82,6 +90,18 @@
 			interrupt-controller;
 			#interrupt-cells = <2>;
 		};
+	};
+
+	/*
+	 * Spreadtrum PCM platform: one AP DMA channel per audio channel, fed
+	 * by the VBC FIFO requests (UID 29/30 = DA0/DA1).
+	 */
+	audio_pcm: audio-platform {
+		compatible = "sprd,pcm-platform";
+		dmas = <&ap_dma 29>, <&ap_dma 30>;
+		dma-names = "normal_p_l", "normal_p_r";
+		#sound-dai-cells = <0>;
+		status = "disabled";
 	};
 
 	/* SC2723 auxiliary ADC (mach-sprd/sc2723-adc.c), raw counts */
@@ -143,6 +163,44 @@
 			reg = <0x402b0000 0x100>, <0x402e0000 0x4>;
 			reg-names = "pmu", "aon-apb";
 			#power-domain-cells = <1>;
+		};
+
+		/* AP AHB enable bits as gate clocks (mach-sprd/clk-gates.c) */
+		ap_ahb_gates: clock-controller@20d00000 {
+			compatible = "sprd,sc7730-gates";
+			reg = <0x20d00000 0x4>;
+			clocks = <&ext_26m>;
+			#clock-cells = <1>;
+		};
+
+		/*
+		 * AP DMA (r4p0, the SC9860 layout), gate AP_AHB bit 5, off after
+		 * the bootloader. Only channels 24-31 are "full" channels. Audio
+		 * request IDs: VB_DA0/1 = 29/30, VB_AD0-3 = 31-34.
+		 */
+		ap_dma: dma-controller@20100000 {
+			compatible = "sprd,sc7730-dma", "sprd,sc9860-dma";
+			reg = <0x20100000 0x4000>;
+			interrupts = <GIC_SPI 50 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ap_ahb_gates 5>;
+			clock-names = "enable";
+			#dma-cells = <1>;
+			dma-channels = <32>;
+			status = "disabled";
+		};
+
+		/*
+		 * Voice band codec FIFOs and the digital DAC part ("DP") of the
+		 * audio codec; clocks, resets and the hand-over from the modem
+		 * side in AON APB (sound/soc/sprd/sprd-vbc-sc7730.c).
+		 */
+		vbc: audio-controller@40020000 {
+			compatible = "sprd,sc7730-vbc";
+			reg = <0x40020000 0x1000>, <0x40000000 0x1000>,
+			      <0x402e0000 0x4000>;
+			reg-names = "vbc", "dp", "aon-apb";
+			#sound-dai-cells = <0>;
+			status = "disabled";
 		};
 
 		/*

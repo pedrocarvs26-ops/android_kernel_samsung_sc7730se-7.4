@@ -70,6 +70,25 @@
 	 * hardware reset in the PMIC, independent of the kernel. The EIC
 	 * debounces in hardware, 50 ms as the bootloader sets it.
 	 */
+	sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "gtelwifi";
+		simple-audio-card,widgets = "Speaker", "Speaker";
+		simple-audio-card,routing = "Speaker", "SPK";
+
+		simple-audio-card,cpu {
+			sound-dai = <&vbc>;
+		};
+
+		simple-audio-card,plat {
+			sound-dai = <&audio_pcm>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&sc2723_codec>;
+		};
+	};
+
 	gpio-keys {
 		compatible = "gpio-keys";
 
@@ -369,6 +388,26 @@
 };
 
 &gpu {
+	status = "okay";
+};
+
+/*
+ * Mono internal speaker on the SC2723's AOL output and internal PA, fed
+ * by the VBC through the AP DMA. Headphones and capture to come.
+ */
+&ap_dma {
+	status = "okay";
+};
+
+&vbc {
+	status = "okay";
+};
+
+&audio_pcm {
+	status = "okay";
+};
+
+&sc2723_codec {
 	status = "okay";
 };
 
