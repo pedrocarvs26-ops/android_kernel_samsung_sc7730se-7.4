@@ -193,10 +193,16 @@ static int sprd_vbc_trigger(struct snd_pcm_substream *substream, int cmd,
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
+		/*
+		 * The digital DACs stay on: the analog path behind them can
+		 * stay powered between streams (pmdown_time), and an analog
+		 * DAC without a running sigma-delta modulator picks up noise
+		 * that the speaker amplifier makes audible. They go off with
+		 * the system suspend, like the analog path.
+		 */
 		sprd_vbc_rmw(v->vbc + VBDABUFFDTA, VBENABLE | DA0_DMA_EN |
 			     DA1_DMA_EN, 0);
 		sprd_vbc_rmw(v->vbc + VBCHNEN, DA0_CHN_EN | DA1_CHN_EN, 0);
-		sprd_vbc_rmw(v->dp + AUD_TOP_CTL, DAC_EN_L | DAC_EN_R, 0);
 		break;
 	default:
 		return -EINVAL;
@@ -224,8 +230,17 @@ static struct snd_soc_dai_driver sprd_vbc_dai = {
 	.ops = &sprd_vbc_dai_ops,
 };
 
+static int sprd_vbc_suspend(struct snd_soc_component *component)
+{
+	struct sprd_vbc *v = snd_soc_component_get_drvdata(component);
+
+	sprd_vbc_rmw(v->dp + AUD_TOP_CTL, DAC_EN_L | DAC_EN_R, 0);
+	return 0;
+}
+
 static const struct snd_soc_component_driver sprd_vbc_component = {
 	.name = "sprd-vbc-sc7730",
+	.suspend = sprd_vbc_suspend,
 	.legacy_dai_naming = 1,
 };
 
