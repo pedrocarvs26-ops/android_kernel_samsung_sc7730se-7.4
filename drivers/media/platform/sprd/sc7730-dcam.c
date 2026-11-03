@@ -4,10 +4,12 @@
  * DesignWare CSI-2 host (v1.03) with its two D-PHYs and the DCAM capture
  * engine, used here as a plain receiver for sensors with their own ISP.
  *
- * DCAM path 1 writes the captured YUV422 with the scaler bypassed as a Y
- * plane plus an interleaved CbCr plane, 4:2:0 (NV12) or 4:2:2 (NV16); it
- * has no line pitch, so lines are packed and the CbCr plane starts at
- * width * height. Frame
+ * DCAM path 1 writes the captured YUV422 as a Y plane plus an interleaved
+ * CbCr plane, 4:2:2 (NV16) with the scaler bypassed or 4:2:0 (NV12) through
+ * the scaler at 1:1, which halves the chroma lines (with the scaler
+ * bypassed the YUV420 mode keeps every chroma line and places them wrong,
+ * which is why the vendor bypasses only for YUV422). It has no line pitch,
+ * so lines are packed and the CbCr plane starts at width * height. Frame
  * addresses are shadowed: written at the path's start of frame they latch
  * at the next one (auto copy), as in the vendor driver. A scratch buffer
  * takes frames for which user space has queued nothing.
@@ -56,6 +58,8 @@
 #define  CTL_PATH1_COEF_FORCE	BIT(14)
 #define PATH1_CFG		0x10
 #define  P1_OUT_FMT		GENMASK(7, 6)	/* 0 YUV422, 1 YUV420, 2-plane */
+#define  P1_UV_TAP		GENMASK(15, 11)
+#define  P1_Y_TAP		GENMASK(19, 16)
 #define  P1_SCALER_BYPASS	BIT(20)
 #define PATH1_SRC_SIZE		0x14
 #define PATH1_DST_SIZE		0x18
@@ -92,6 +96,9 @@
 #define CAP_MIPI_START		0x130
 #define CAP_MIPI_END		0x134
 #define CAP_MIPI_IMG_DECI	0x138
+#define SC1_COEF_H		0x400	/* path1 scaler coefficient RAM */
+#define SC1_COEF_V		0x4f0
+#define SC1_COEF_VC		0x8f0
 
 /* CSI-2 host */
 #define CSI_VERSION		0x00
@@ -419,6 +426,55 @@ static struct dcam_buf *dcam_take_buf(struct dcam *d)
 	return buf;
 }
 
+/*
+ * Scaler coefficients for YUV422 in, YUV420 out at 1:1, from the vendor's
+ * Dcam_GenScaleCoeff() (drivers/media/sprd_dcam/common/gen_scale_coef.c).
+ * They do not depend on the frame size at 1:1 (checked for 320x240 up to
+ * 2048x1536); taps 4 luma, 4 chroma. Entries not listed are 0.
+ */
+#define DCAM_SC_TAP		4
+
+static const u32 dcam_sc_coef_h[48] = {
+	[1] = 0x00000200, 0x000000ff, 0x00000000, 0x00000400, 0x000041f7, 0x0003d2fc,
+	0x0003fe03, 0x000009ff, 0x000093eb, 0x0003b6eb, 0x0003fc05, 0x00000ffe,
+	0x000117da, 0x0003b4b8, 0x0003fc06, 0x00000ffe, 0x000147d8, 0x0003b0a3,
+	0x0003fc07, 0x00000dfe, 0x000171da, 0x0003b48b, 0x0003fc07, 0x00000bfe,
+	0x0001d9db, 0x0003d648, 0x0003fe04, 0x000007ff, 0x0001fbe9, 0x0003ee1f,
+	0x00000002, 0x00000200, 0x000000ff, 0x00002bff, 0x0003f6f1, 0x00006bfd,
+	0x0003eed7, 0x0000ddf8, 0x0003eca4, 0x000117f5, 0x0003ea8b, 0x000147f6,
+	0x0003f06f, 0x0001aff7, 0x0003fa35, 0x0001e3fb, 0x0003fe15,
+};
+
+static const u32 dcam_sc_coef_v[132] = {
+	[1] = 0x000000ff, 0x00000001, 0x00000000, 0xfffffffb, 0x000000f1, 0x00000015,
+	0xffffffff, 0xfffffff7, 0x000000d7, 0x00000035, 0xfffffffd, 0xfffffff6,
+	0x000000a4, 0x0000006e, 0xfffffff8, 0xfffffff5, 0x0000008b, 0x0000008b,
+	0xfffffff5, 0xfffffff8, 0x0000006f, 0x000000a3, 0xfffffff6, 0xfffffffd,
+	0x00000035, 0x000000d7, 0xfffffff7, 0xffffffff, 0x00000015, 0x000000f1,
+	0xfffffffb,
+};
+
+static const u32 dcam_sc_coef_vc[132] = {
+	[0] = 0x00000034, 0x00000098, 0x00000034,
+	[16] = 0x00000015, 0x000000b0, 0x0000003a, 0x00000001,
+	[32] = 0x00000011, 0x000000a3, 0x0000004a, 0x00000002,
+	[48] = 0x0000000d, 0x0000008f, 0x0000005f, 0x00000005,
+	[64] = 0x00000009, 0x00000077, 0x00000077, 0x00000009,
+	[80] = 0x00000005, 0x0000005f, 0x0000008f, 0x0000000d,
+	[96] = 0x00000002, 0x0000004b, 0x000000a2, 0x00000011,
+	[112] = 0x00000001, 0x0000003a, 0x000000b0, 0x00000015,
+	[128] = 0x000000cc, 0x00000000, 0x00000000, 0x00000034,
+};
+
+static void dcam_load_coef(struct dcam *d, u32 off, const u32 *coef,
+			   unsigned int n)
+{
+	unsigned int i;
+
+	for (i = 0; i < n; i++)
+		writel(coef[i], d->base + off + 4 * i);
+}
+
 static void dcam_hw_start(struct dcam *d)
 {
 	u32 size = d->fmt.width | d->fmt.height << 16;
@@ -445,9 +501,20 @@ static void dcam_hw_start(struct dcam *d)
 	writel(0, d->base + PATH1_TRIM_START);
 	writel(size, d->base + PATH1_TRIM_SIZE);
 	writel(size, d->base + PATH1_DST_SIZE);
-	writel(P1_SCALER_BYPASS |
-	       FIELD_PREP(P1_OUT_FMT, d->fmt.pixelformat == V4L2_PIX_FMT_NV12),
-	       d->base + PATH1_CFG);
+	if (d->fmt.pixelformat == V4L2_PIX_FMT_NV12) {
+		/* the scaler at 1:1 does the 4:2:0 chroma decimation */
+		dcam_load_coef(d, SC1_COEF_H, dcam_sc_coef_h,
+			       ARRAY_SIZE(dcam_sc_coef_h));
+		dcam_load_coef(d, SC1_COEF_V, dcam_sc_coef_v,
+			       ARRAY_SIZE(dcam_sc_coef_v));
+		dcam_load_coef(d, SC1_COEF_VC, dcam_sc_coef_vc,
+			       ARRAY_SIZE(dcam_sc_coef_vc));
+		writel(FIELD_PREP(P1_OUT_FMT, 1) |
+		       FIELD_PREP(P1_UV_TAP, DCAM_SC_TAP) |
+		       FIELD_PREP(P1_Y_TAP, DCAM_SC_TAP), d->base + PATH1_CFG);
+	} else {
+		writel(P1_SCALER_BYPASS, d->base + PATH1_CFG);
+	}
 	dcam_rmw(d->base + ENDIAN_SEL, 0, ENDIAN_P1_LITTLE | ENDIAN_AXI);
 
 	spin_lock_irqsave(&d->qlock, flags);
