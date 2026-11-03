@@ -29,6 +29,7 @@
 
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
+#include <sound/tlv.h>
 
 #include "sprd-pcm-dma.h"
 
@@ -48,6 +49,16 @@
 #define  VBENABLE		BIT(15)
 #define VBIISSEL		0x3c
 #define  DA_LRCK_POL		BIT(14)
+/*
+ * AD0/AD1 digital gain: 7-bit attenuation in 0.75 dB steps with 0x18 =
+ * 0 dB (measured on the gtelwifi: 0x00 +18 dB, 0x30 -18 dB) and an enable
+ * bit per channel. Only 0x00-0x30 is exposed.
+ */
+#define ADDG01CTL		0x84
+#define  AD0_DG_EN		BIT(7)
+#define  AD1_DG_EN		BIT(15)
+#define  AD_DG_0DB		0x18
+#define  AD_DG_MAX		0x30
 #define DAHPCTL			0x48
 /*
  * Bits 8:0 of DAHPCTL as the vendor's neutral DA profile sets them; with 0
@@ -301,9 +312,38 @@ static int sprd_vbc_suspend(struct snd_soc_component *component)
 	return 0;
 }
 
+/* the controls below only reach VBC registers, which stay clocked */
+static unsigned int sprd_vbc_read(struct snd_soc_component *component,
+				  unsigned int reg)
+{
+	struct sprd_vbc *v = snd_soc_component_get_drvdata(component);
+
+	return readl(v->vbc + reg);
+}
+
+static int sprd_vbc_write(struct snd_soc_component *component,
+			  unsigned int reg, unsigned int val)
+{
+	struct sprd_vbc *v = snd_soc_component_get_drvdata(component);
+
+	writel(val, v->vbc + reg);
+	return 0;
+}
+
+static const DECLARE_TLV_DB_SCALE(sprd_vbc_ad_dg_tlv, -1800, 75, 0);
+
+static const struct snd_kcontrol_new sprd_vbc_controls[] = {
+	SOC_DOUBLE_TLV("ADC Digital Capture Volume", ADDG01CTL, 0, 8,
+		       AD_DG_MAX, 1, sprd_vbc_ad_dg_tlv),
+};
+
 static const struct snd_soc_component_driver sprd_vbc_component = {
 	.name = "sprd-vbc-sc7730",
 	.suspend = sprd_vbc_suspend,
+	.read = sprd_vbc_read,
+	.write = sprd_vbc_write,
+	.controls = sprd_vbc_controls,
+	.num_controls = ARRAY_SIZE(sprd_vbc_controls),
 	.legacy_dai_naming = 1,
 };
 
@@ -350,6 +390,9 @@ static int sprd_vbc_probe(struct platform_device *pdev)
 	udelay(10);
 	sprd_vbc_aon_rmw(v, AON_RST0, RST0_AUD, 0);
 	sprd_vbc_clear_da(v);
+	/* AD digital gain on at 0 dB, so the control below sets it directly */
+	writel(AD0_DG_EN | AD1_DG_EN | AD_DG_0DB << 8 | AD_DG_0DB,
+	       v->vbc + ADDG01CTL);
 
 	for (i = 0; i < 2; i++) {
 		v->dma[SNDRV_PCM_STREAM_PLAYBACK].dev_phys[i] =
