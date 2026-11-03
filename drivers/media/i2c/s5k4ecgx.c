@@ -49,10 +49,15 @@
 #define S5K_FW_REVISION		0x700001a6
 #define S5K_G_ENABLE_PREV	0x7000023e
 #define S5K_G_ENABLE_PREV_CHG	0x70000240
-/* user adjustments on top of the tuning, signed, 0 = unchanged */
-#define S5K_USER_BRIGHTNESS	0x7000022c
-#define S5K_USER_CONTRAST	0x7000022e
-#define S5K_USER_SATURATION	0x70000230
+/*
+ * User adjustments on top of the tuning, signed, 0 = unchanged. Addresses
+ * as the stock HAL's contrast/saturation tables write them (and measured:
+ * 0x230 moves the luma, 0x234 the chroma); the old mainline driver's
+ * 0x22c/0x22e/0x230 are one word off for this firmware.
+ */
+#define S5K_USER_BRIGHTNESS	0x70000230
+#define S5K_USER_CONTRAST	0x70000232
+#define S5K_USER_SATURATION	0x70000234
 #define S5K_SATURATION_DEF	0
 
 #define S5K_MCLK_HZ		24000000
@@ -453,7 +458,7 @@ static int s5k_init_controls(struct s5k4ecgx *s5k)
 
 	v4l2_ctrl_handler_init(hdl, 7);
 	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_BRIGHTNESS,
-			  -208, 127, 1, 0);
+			  -127, 127, 1, 0);
 	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_CONTRAST,
 			  -127, 127, 1, 0);
 	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_SATURATION,
