@@ -62,8 +62,12 @@ struct sr200_mode {
 /* lane rates of the HAL: 192, 288 and 384 Mbit/s, DDR */
 static const s64 sr200_link_freqs[] = { 96000000, 144000000, 192000000 };
 
+/*
+ * The first mode is the default, which camera applications tend to keep
+ * for the preview. The HAL's 800x600 table runs at 8 fps, so it is left
+ * out; 640x480 runs at 24 fps.
+ */
 static const struct sr200_mode sr200_modes[] = {
-	{ 800, 600, "sr200pc20m/800x600.bin", true, 0 },
 	/* the HAL's 640x480 table is a complete init of its own */
 	{ 640, 480, "sr200pc20m/640x480.bin", false, 1 },
 	{ 1600, 1200, "sr200pc20m/1600x1200.bin", true, 2 },
