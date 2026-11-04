@@ -5130,7 +5130,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 
 		if (unlikely(folio_start < max(address & PMD_MASK, vma->vm_start)))
 			goto check_folio;
-		if (unlikely(folio_end > pmd_addr_end(address, vma->vm_end)))
+		if (unlikely(folio_end > pte_table_end(address, vma->vm_end)))
 			goto check_folio;
 
 		folio_ptep = vmf->pte - idx;

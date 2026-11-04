@@ -385,6 +385,25 @@ static inline pte_t __pte_batch_clear_ignored(pte_t pte, fpb_t flags)
 }
 
 /**
+ * pte_table_end - end of the PTE table that maps an address
+ * @addr: address mapped by the PTE table
+ * @end: end of the range of interest
+ *
+ * Return: the end of the PTE table that maps @addr, or @end if that comes
+ * first. Code that batches PTEs it did not get from a page table walk must
+ * use this, not pmd_addr_end(): with a folded PMD (2-level page tables, e.g.
+ * 32-bit Arm without LPAE) pmd_addr_end() returns @end unchanged, because the
+ * pgd level already bounds every walk there, and a batch would run off the
+ * end of the PTE table.
+ */
+static inline unsigned long pte_table_end(unsigned long addr, unsigned long end)
+{
+	unsigned long boundary = (addr + PMD_SIZE) & PMD_MASK;
+
+	return boundary - 1 < end - 1 ? boundary : end;
+}
+
+/**
  * folio_pte_batch_flags - detect a PTE batch for a large folio
  * @folio: The large folio to detect a PTE batch for.
  * @vma: The VMA. Only relevant with FPB_MERGE_WRITE, otherwise can be NULL.
