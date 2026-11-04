@@ -17,16 +17,21 @@
  * them up, and so are gate and reset unless an "ap-ahb" region is given
  * (EB at +0, RST at +4, bits in "sprd,ahb-eb-bit"/"sprd,ahb-rst-bit"): the
  * bootloader only enables the eMMC host, the WLAN slot SDIO1 stays gated.
+ * The gate is the "ahb" clock (an AP AHB gate clock) when the device tree
+ * names one; both registers are shared with other blocks, and the two SDIO
+ * hosts probe in parallel.
  */
 
 #include <linux/bitfield.h>
 #include <linux/bits.h>
+#include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/mmc/host.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/spinlock.h>
 
 #include "sdhci-pltfm.h"
 
@@ -94,27 +99,52 @@ static const struct sdhci_pltfm_data sc7730_sdhci_pdata = {
 		   SDHCI_QUIRK2_BROKEN_HS200,
 };
 
-static void sc7730_sdhci_ahb_init(struct platform_device *pdev)
+/*
+ * EB and RST are read-modify-write registers shared by all AP AHB blocks.
+ * Unlocked, the parallel probes of SDIO0 and SDIO1 lost each other's bits:
+ * one host stayed gated or in reset and read back all zeroes ("Internal
+ * clock never stabilised").
+ */
+static DEFINE_SPINLOCK(sc7730_ahb_lock);
+
+static void sc7730_ahb_update(void __iomem *reg, u32 set, u32 clear)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&sc7730_ahb_lock, flags);
+	writel((readl(reg) & ~clear) | set, reg);
+	spin_unlock_irqrestore(&sc7730_ahb_lock, flags);
+}
+
+static int sc7730_sdhci_ahb_init(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
 	struct resource *res;
 	void __iomem *ahb;
+	struct clk *gate;
 	u32 eb, rst;
 
+	/* the gate clock shares its lock with every other AP AHB gate user */
+	gate = devm_clk_get_optional_enabled(&pdev->dev, "ahb");
+	if (IS_ERR(gate))
+		return dev_err_probe(&pdev->dev, PTR_ERR(gate),
+				     "failed to enable the ahb gate\n");
+
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ap-ahb");
-	if (!res || of_property_read_u32(np, "sprd,ahb-eb-bit", &eb) ||
-	    of_property_read_u32(np, "sprd,ahb-rst-bit", &rst))
-		return;
+	if (!res || of_property_read_u32(np, "sprd,ahb-rst-bit", &rst))
+		return 0;
 	/* shared with other blocks, so no request_mem_region */
 	ahb = devm_ioremap(&pdev->dev, res->start, resource_size(res));
 	if (!ahb)
-		return;
+		return 0;
 	/* vendor sequence: gate on, wait, then a reset pulse */
-	writel(readl(ahb + SC7730_AHB_EB) | BIT(eb), ahb + SC7730_AHB_EB);
+	if (!gate && !of_property_read_u32(np, "sprd,ahb-eb-bit", &eb))
+		sc7730_ahb_update(ahb + SC7730_AHB_EB, BIT(eb), 0);
 	usleep_range(500, 1000);
-	writel(readl(ahb + SC7730_AHB_RST) | BIT(rst), ahb + SC7730_AHB_RST);
+	sc7730_ahb_update(ahb + SC7730_AHB_RST, BIT(rst), 0);
 	usleep_range(200, 400);
-	writel(readl(ahb + SC7730_AHB_RST) & ~BIT(rst), ahb + SC7730_AHB_RST);
+	sc7730_ahb_update(ahb + SC7730_AHB_RST, 0, BIT(rst));
+	return 0;
 }
 
 static int sc7730_sdhci_probe(struct platform_device *pdev)
@@ -132,7 +162,9 @@ static int sc7730_sdhci_probe(struct platform_device *pdev)
 	priv = sdhci_pltfm_priv(sdhci_priv(host));
 
 	/* before the first register access, a gated host hangs the bus */
-	sc7730_sdhci_ahb_init(pdev);
+	ret = sc7730_sdhci_ahb_init(pdev);
+	if (ret)
+		return ret;
 
 	clk_cfg = devm_platform_ioremap_resource_byname(pdev, "clk-cfg");
 	if (IS_ERR(clk_cfg))

@@ -51,6 +51,17 @@ properties:
   interrupts:
     maxItems: 1
 
+  clocks:
+    maxItems: 1
+    description:
+      Gate of this host in the AP AHB clock enable register. When given it
+      is enabled through the clock framework, which serializes the shared
+      register with the other AP AHB blocks, instead of setting
+      sprd,ahb-eb-bit directly.
+
+  clock-names:
+    const: ahb
+
   sprd,clk-parent-rates:
     $ref: /schemas/types.yaml#/definitions/uint32-array
     description:
