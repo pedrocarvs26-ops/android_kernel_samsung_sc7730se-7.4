@@ -289,7 +289,12 @@ static struct snd_soc_dai_driver sprd_vbc_dai = {
 		.stream_name = "VBC Playback",
 		.channels_min = 1,
 		.channels_max = 2,
-		.rates = SNDRV_PCM_RATE_8000_96000,
+		/* exactly the DAC_RATE codes in sprd_vbc_rates[] */
+		.rates = SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_11025 |
+			 SNDRV_PCM_RATE_12000 | SNDRV_PCM_RATE_16000 |
+			 SNDRV_PCM_RATE_22050 | SNDRV_PCM_RATE_24000 |
+			 SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_44100 |
+			 SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_96000,
 		.formats = SNDRV_PCM_FMTBIT_S16_LE,
 	},
 	.capture = {
