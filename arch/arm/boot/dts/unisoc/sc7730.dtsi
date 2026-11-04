@@ -525,6 +525,8 @@
 			      <0x20d00000 0x8>;
 			reg-names = "sdhci", "clk-cfg", "ap-ahb";
 			interrupts = <GIC_SPI 58 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ap_ahb_gates 9>;
+			clock-names = "ahb";
 			sprd,clk-parent-rates = <48000000 76800000 96000000 128000000>;
 			sprd,ahb-eb-bit = <9>;
 			sprd,ahb-rst-bit = <12>;
@@ -542,6 +544,8 @@
 			      <0x20d00000 0x8>;
 			reg-names = "sdhci", "clk-cfg", "ap-ahb";
 			interrupts = <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ap_ahb_gates 8>;
+			clock-names = "ahb";
 			sprd,clk-parent-rates = <26000000 256000000 312000000 384000000>;
 			sprd,clk-sel = <3>;	/* 384 MHz like the vendor */
 			sprd,clk-has-div;
