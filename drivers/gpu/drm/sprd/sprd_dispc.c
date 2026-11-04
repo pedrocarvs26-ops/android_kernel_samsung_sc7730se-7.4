@@ -184,6 +184,7 @@ struct sprd_dispc {
 	spinlock_t int_lock;		/* INT_EN */
 	u32 int_en;
 	dma_addr_t pending_addr;
+	u32 pending_pitch;		/* in pixels, as OSD_PITCH */
 	bool rb_switch;
 	struct drm_pending_vblank_event *event;	/* under drm.event_lock */
 	struct completion update_done;
@@ -206,11 +207,12 @@ static void sprd_dispc_int_update(struct sprd_dispc *d, u32 clr, u32 set)
 }
 
 /*
- * Request the latch of OSD_BASE_ADDR (and OSD_CTRL) at the next VSYNC.
- * UPDATE_DONE is cleared first: clearing it after the request could eat a
- * latch that already happened.
+ * Request the latch of OSD_BASE_ADDR, OSD_PITCH (and OSD_CTRL) at the next
+ * VSYNC. UPDATE_DONE is cleared first: clearing it after the request could
+ * eat a latch that already happened.
  */
-static void sprd_dispc_request_update(struct sprd_dispc *d, dma_addr_t addr)
+static void sprd_dispc_request_update(struct sprd_dispc *d, dma_addr_t addr,
+				      u32 pitch)
 {
 	u32 ctrl = readl(d->base + DISPC_OSD_CTRL);
 
@@ -219,6 +221,7 @@ static void sprd_dispc_request_update(struct sprd_dispc *d, dma_addr_t addr)
 	reinit_completion(&d->update_done);
 	writel(INT_UPDATE_DONE, d->base + DISPC_INT_CLR);
 	writel(addr, d->base + DISPC_OSD_BASE_ADDR);
+	writel(pitch, d->base + DISPC_OSD_PITCH);
 	writel(readl(d->base + DISPC_DPI_CTRL) | DPI_REG_UPDATE,
 	       d->base + DISPC_DPI_CTRL);
 	/* the vendor re-arms underflow reporting on every update */
@@ -228,7 +231,7 @@ static void sprd_dispc_request_update(struct sprd_dispc *d, dma_addr_t addr)
 /* flip and wait, for switching away from a buffer that is about to go */
 static void sprd_dispc_flip_sync(struct sprd_dispc *d, dma_addr_t addr)
 {
-	sprd_dispc_request_update(d, addr);
+	sprd_dispc_request_update(d, addr, d->mode.hdisplay);
 	if (!wait_for_completion_timeout(&d->update_done,
 					 msecs_to_jiffies(FLIP_TIMEOUT_MS)))
 		drm_warn(&d->drm, "no UPDATE_DONE, INT_RAW %08x DPI_CTRL %08x\n",
@@ -292,6 +295,7 @@ static int sprd_dispc_plane_atomic_check(struct drm_plane *plane,
 	struct drm_plane_state *new = drm_atomic_get_new_plane_state(state, plane);
 	struct sprd_dispc *d = to_sprd_dispc(plane->dev);
 	struct drm_crtc_state *crtc_state;
+	unsigned int pitch;
 	int ret;
 
 	if (!new->crtc)
@@ -304,11 +308,22 @@ static int sprd_dispc_plane_atomic_check(struct drm_plane *plane,
 	if (ret || !new->visible)
 		return ret;
 
-	/* one full-screen layer, the layer geometry stays as the bootloader set it */
+	/*
+	 * One full-screen layer, the layer position and size stay as the
+	 * bootloader set them. The pitch is per buffer: OSD_PITCH counts
+	 * pixels (gralloc buffers need not be packed like dumb buffers).
+	 */
+	pitch = new->fb->pitches[0];
 	if (new->crtc_x || new->crtc_y ||
 	    new->crtc_w != d->mode.hdisplay || new->crtc_h != d->mode.vdisplay ||
-	    new->fb->pitches[0] != d->mode.hdisplay * 4)
+	    pitch % 4 || pitch / 4 < d->mode.hdisplay ||
+	    pitch / 4 > FIELD_MAX(SIZE_W)) {
+		drm_dbg_atomic(plane->dev,
+			       "[PLANE:%d] unsupported layer %ux%u+%d+%d, pitch %u\n",
+			       plane->base.id, new->crtc_w, new->crtc_h,
+			       new->crtc_x, new->crtc_y, pitch);
 		return -EINVAL;
+	}
 	return 0;
 }
 
@@ -322,11 +337,13 @@ static void sprd_dispc_plane_atomic_update(struct drm_plane *plane,
 
 	if (!new->visible || !new->fb) {
 		d->pending_addr = d->black_dma;
+		d->pending_pitch = d->mode.hdisplay;
 		return;
 	}
 
 	drm_fb_dma_sync_non_coherent(plane->dev, old, new);
 	d->pending_addr = drm_fb_dma_get_gem_addr(new->fb, new, 0);
+	d->pending_pitch = new->fb->pitches[0] / 4;
 	format = new->fb->format->format;
 	d->rb_switch = format == DRM_FORMAT_XBGR8888;
 }
@@ -372,7 +389,7 @@ static void sprd_dispc_crtc_atomic_flush(struct drm_crtc *crtc,
 	}
 	spin_unlock_irq(&crtc->dev->event_lock);
 
-	sprd_dispc_request_update(d, d->pending_addr);
+	sprd_dispc_request_update(d, d->pending_addr, d->pending_pitch);
 	mod_delayed_work(system_dfl_wq, &d->flip_timeout,
 			 msecs_to_jiffies(FLIP_TIMEOUT_MS));
 }
@@ -782,6 +799,7 @@ static int sprd_dispc_probe(struct platform_device *pdev)
 	if (!d->black)
 		return -ENOMEM;
 	d->pending_addr = d->black_dma;
+	d->pending_pitch = d->mode.hdisplay;
 
 	/* the bootloader leaves a stale UPDATE_DONE behind */
 	writel(0, d->base + DISPC_INT_EN);
