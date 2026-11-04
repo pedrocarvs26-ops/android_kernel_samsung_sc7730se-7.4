@@ -192,9 +192,15 @@ static inline void validate_fs_switch(struct fs_struct *old_fs)
 	/* @old_fs may be dangling but for comparison it's fine */
 	if (old_fs != userspace_init_fs)
 		return;
-	pr_warn("VFS: Pid 1 stopped sharing filesystem state\n");
-	set_fs_root(userspace_init_fs, &init_fs.root);
-	set_fs_pwd(userspace_init_fs, &init_fs.root);
+	/*
+	 * Android's init starts its property service as a thread of PID 1
+	 * and unshares the mount namespace afterwards. That thread keeps
+	 * using the old fs_struct: reverted to nullfs it can no longer reach
+	 * selinuxfs, libselinux then denies every property change and the
+	 * boot stops waiting for ro.cold_boot_done. Keep the old state for
+	 * the threads that still share it, as kernels before 7.x did.
+	 */
+	pr_warn_once("VFS: Pid 1 stopped sharing filesystem state, kept for its threads\n");
 }
 
 struct fs_struct *switch_fs_struct(struct fs_struct *new_fs)
