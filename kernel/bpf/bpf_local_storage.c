@@ -51,6 +51,29 @@ owner_storage(struct bpf_local_storage_map *smap, void *owner)
 	return map->ops->map_owner_storage_ptr(owner);
 }
 
+/*
+ * kmalloc_nolock() needs caches that update the freelist with a double word
+ * cmpxchg (__CMPXCHG_DOUBLE). On architectures without one, e.g. 32-bit Arm,
+ * it returns NULL every time, and no local storage could ever be created.
+ * In preemptible context this CPU holds no slab lock (the per-CPU sheaves
+ * are locked with preemption off, the node lists with interrupts off), so a
+ * plain non-sleeping allocation is safe there; that covers the creation in
+ * cgroup/sock_create programs. Local storage is freed with kfree() or
+ * kfree_rcu(), which take both kinds of objects.
+ */
+static void *bpf_local_storage_kmalloc(struct bpf_local_storage_map *smap,
+				       size_t size)
+{
+	void *ptr;
+
+	ptr = bpf_map_kmalloc_nolock(&smap->map, size, __GFP_ZERO, NUMA_NO_NODE);
+	if (!ptr && preemptible())
+		ptr = bpf_map_kmalloc_node(&smap->map, size,
+					   GFP_NOWAIT | __GFP_ZERO | __GFP_NOWARN,
+					   NUMA_NO_NODE);
+	return ptr;
+}
+
 static bool selem_linked_to_storage_lockless(const struct bpf_local_storage_elem *selem)
 {
 	return !hlist_unhashed_lockless(&selem->snode);
@@ -75,8 +98,7 @@ bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner,
 	if (mem_charge(smap, owner, smap->elem_size))
 		return NULL;
 
-	selem = bpf_map_kmalloc_nolock(&smap->map, smap->elem_size,
-				       __GFP_ZERO, NUMA_NO_NODE);
+	selem = bpf_local_storage_kmalloc(smap, smap->elem_size);
 
 	if (selem) {
 		RCU_INIT_POINTER(SDATA(selem)->smap, smap);
@@ -512,8 +534,7 @@ int bpf_local_storage_alloc(void *owner,
 	if (err)
 		return err;
 
-	storage = bpf_map_kmalloc_nolock(&smap->map, sizeof(*storage),
-					 __GFP_ZERO, NUMA_NO_NODE);
+	storage = bpf_local_storage_kmalloc(smap, sizeof(*storage));
 	if (!storage) {
 		err = -ENOMEM;
 		goto uncharge;
