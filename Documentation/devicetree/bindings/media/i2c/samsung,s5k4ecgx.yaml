@@ -40,6 +40,9 @@ properties:
   dvdd-supply:
     description: Digital core supply, 1.2 V
 
+  afvdd-supply:
+    description: Autofocus actuator supply, 2.8 V
+
   reset-gpios:
     maxItems: 1
     description: Reset input, active low
@@ -103,6 +106,7 @@ examples:
             avdd-supply = <&vddcama>;
             dovdd-supply = <&vddcamio>;
             dvdd-supply = <&cam_dvdd>;
+            afvdd-supply = <&vddcammot>;
             reset-gpios = <&gpio 186 GPIO_ACTIVE_LOW>;
             powerdown-gpios = <&gpio 188 GPIO_ACTIVE_LOW>;
             orientation = <1>;

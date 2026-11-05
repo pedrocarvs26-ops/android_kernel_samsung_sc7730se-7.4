@@ -15,8 +15,28 @@
  * skipped here, so that the preview size is set first and the stream
  * starts in enable_streams; until then the lanes idle in LP-11. Stream
  * on and off use REG_G_ENABLE_PREV and REG_G_ENABLE_PREV_CHG as the
- * former mainline driver did. Only the preview path is supported; the
- * capture sizes of the HAL (up to 2576x1932) need its capture sequence.
+ * former mainline driver did.
+ *
+ * Still captures (module parameter still_modes, experimental): the ISP
+ * has a capture configuration next to the preview one. A capture size
+ * table of the HAL sets its input window and output size, the switch is
+ * REG_TC_GP_EnableCapture with its "changed" flag. As in the stock HAL,
+ * AE and AWB (and one autofocus search) settle in a preview first. The
+ * switch happens in pre_streamon, before the receiver starts, so that
+ * the receiver only ever sees capture frames; the lanes are then in HS
+ * when it starts, as they always were with the vendor stack. The output
+ * stays YUV 4:2:2 at 344 Mbit/s per lane (both system clocks of the init
+ * table have the same output rate).
+ *
+ * Autofocus, following the HAL: AUTO_FOCUS_RANGE writes its normal or
+ * macro lens table (s5k4ecgx/af-normal.bin, af-macro.bin, optional),
+ * AUTO_FOCUS_START sends a single search (REG_TC_AF_AfCmd 5) and polls
+ * the coarse search status, then the fine search flag. The S5K HAL has no
+ * continuous AF. libcamera does not use any of these controls.
+ *
+ * The capture switch and AF command/status words are the sensor
+ * firmware's interface variables (also in Samsung's GPL S5K4ECGX
+ * drivers); everything with tuning or lens data stays in firmware files.
  */
 
 #include <linux/clk.h>
@@ -28,6 +48,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
+#include <linux/workqueue.h>
 
 #include <media/v4l2-cci.h>
 #include <media/v4l2-ctrls.h>
@@ -49,6 +70,10 @@
 #define S5K_FW_REVISION		0x700001a6
 #define S5K_G_ENABLE_PREV	0x7000023e
 #define S5K_G_ENABLE_PREV_CHG	0x70000240
+/* still capture: as the preview enable, plus a configuration sync */
+#define S5K_G_ENABLE_CAP	0x70000242	/* REG_TC_GP_EnableCapture */
+#define S5K_G_ENABLE_CAP_CHG	0x70000244
+#define S5K_G_NEW_CFG_SYNC	0x7000024e
 /*
  * User adjustments on top of the tuning, signed, 0 = unchanged. Addresses
  * as the stock HAL's contrast/saturation tables write them (and measured:
@@ -66,13 +91,26 @@
  */
 #define S5K_PCFG0_MAX_FR_TIME	0x700002c2
 #define  S5K_MAX_FR_TIME_15FPS	666
+/* autofocus */
+#define S5K_AF_CMD		0x7000028c	/* REG_TC_AF_AfCmd */
+#define  S5K_AF_CMD_LENS	4		/* lens to S5K_AF_CMD_PARAM */
+#define  S5K_AF_CMD_SINGLE	5		/* one search */
+#define S5K_AF_CMD_PARAM	0x7000028e
+#define S5K_AF_SEARCH_STATUS	0x70002eee	/* 1 searching, 2 found */
+#define S5K_AF_FINE_STATUS	0x70002207	/* 15:8 non-zero while busy */
+#define S5K_AE_STABLE		0x70002c74	/* 1 when AE has settled */
 
 #define S5K_MCLK_HZ		24000000
 #define S5K_LANES		2
 
+#define S5K_AF_POLL_MS		50
+#define S5K_AF_SEARCH_POLLS	100	/* the HAL gives up after ~5 s */
+#define S5K_AF_FINE_POLLS	60
+
 struct s5k_mode {
 	unsigned int width, height;
 	const char *fw;
+	bool still;		/* a capture configuration */
 };
 
 /* 344 Mbit/s per lane, DDR, set up by the init table for all sizes */
@@ -88,9 +126,45 @@ static const s64 s5k_link_freqs[] = { 172000000 };
 static const struct s5k_mode s5k_modes[] = {
 	{ 640, 480, "s5k4ecgx/640x480.bin" },
 	{ 800, 480, "s5k4ecgx/800x480.bin" },
+	/* capture configurations, only with still_modes */
+	{ 1600, 1200, "s5k4ecgx/1600x1200.bin", true },
+	{ 2048, 1536, "s5k4ecgx/2048x1536.bin", true },
+	{ 2560, 1920, "s5k4ecgx/2560x1920.bin", true },
+	{ 2576, 1932, "s5k4ecgx/2576x1932.bin", true },
 };
 
+#define S5K_NUM_PREVIEW_MODES	2
+/* the preview in which AE/AWB/AF settle before a still */
+#define S5K_STILL_PREVIEW	(&s5k_modes[0])
+
+static bool still_modes;
+module_param(still_modes, bool, 0644);
+MODULE_PARM_DESC(still_modes, "Offer the still sizes up to 2576x1932 (experimental)");
+
+static unsigned int still_settle_ms = 1000;
+module_param(still_settle_ms, uint, 0644);
+MODULE_PARM_DESC(still_settle_ms,
+		 "Preview time for AE/AWB before a still, 0 = switch right after the init");
+
+static bool still_af = true;
+module_param(still_af, bool, 0644);
+MODULE_PARM_DESC(still_af, "One autofocus search before a still (needs still_settle_ms)");
+
+static unsigned int still_skip = 1;
+module_param(still_skip, uint, 0644);
+MODULE_PARM_DESC(still_skip, "Frames the receiver drops after the capture switch (HAL: 1)");
+
+static unsigned int preview_af_ms;
+module_param(preview_af_ms, uint, 0644);
+MODULE_PARM_DESC(preview_af_ms, "One autofocus search this long after a preview starts, 0 = off");
+
 static const char * const s5k_supplies[] = { "dovdd", "avdd", "dvdd" };
+
+enum { S5K_AF_IDLE, S5K_AF_START, S5K_AF_SEARCH, S5K_AF_FINE };
+
+/* s5k_write_table() flags */
+#define S5K_TAB_SKIP_ENABLE	BIT(0)	/* leave out the preview enable */
+#define S5K_TAB_OPTIONAL	BIT(1)	/* -ENOENT without an error if missing */
 
 struct s5k4ecgx {
 	struct v4l2_subdev sd;
@@ -101,15 +175,30 @@ struct s5k4ecgx {
 	struct gpio_desc *reset_gpio;
 	struct gpio_desc *powerdown_gpio;
 	struct regulator_bulk_data supplies[ARRAY_SIZE(s5k_supplies)];
+	struct regulator *afvdd;	/* AF actuator, optional */
 	struct v4l2_ctrl_handler ctrls;
 	const struct s5k_mode *mode;
 	const struct s5k_mode *loaded;	/* tables in the ISP, NULL after power off */
+	const struct s5k_mode *still;	/* switched to this capture configuration */
 	bool powered;			/* by pre_streamon */
+
+	/* under the control handler lock, as all access to the ISP */
+	bool af_ok;			/* a preview is running */
+	int af_range;			/* lens table in the ISP: 0 normal, 1 macro */
+	unsigned int af_phase, af_polls, af_retries;
+	u32 af_status;			/* V4L2_AUTO_FOCUS_STATUS_* */
+	unsigned long af_started;
+	struct delayed_work af_work;
 };
 
 static inline struct s5k4ecgx *to_s5k(struct v4l2_subdev *sd)
 {
 	return container_of(sd, struct s5k4ecgx, sd);
+}
+
+static unsigned int s5k_num_modes(void)
+{
+	return still_modes ? ARRAY_SIZE(s5k_modes) : S5K_NUM_PREVIEW_MODES;
 }
 
 /* one word into the ISP's RAM */
@@ -134,12 +223,25 @@ static int s5k_read(struct s5k4ecgx *s5k, u32 addr, u64 *val)
 	return ret;
 }
 
+/* a few words, after selecting the ISP's AHB page */
+static int s5k_write_words(struct s5k4ecgx *s5k, const u32 *addr,
+			   const u16 *val, unsigned int n)
+{
+	unsigned int i;
+	int ret = 0;
+
+	cci_write(s5k->regmap, S5K_REG_AHB_PAGE, S5K_AHB_PAGE, &ret);
+	for (i = 0; i < n && !ret; i++)
+		ret = s5k_write(s5k, addr[i], val[i]);
+	return ret;
+}
+
 /*
- * Write a HAL table. With skip_enable, data words that would land on
- * REG_G_ENABLE_PREV or REG_G_ENABLE_PREV_CHG are left out.
+ * Write a HAL table. With S5K_TAB_SKIP_ENABLE, data words that would land
+ * on REG_G_ENABLE_PREV or REG_G_ENABLE_PREV_CHG are left out.
  */
 static int s5k_write_table(struct s5k4ecgx *s5k, const char *name,
-			   bool skip_enable)
+			   unsigned int flags)
 {
 	const struct firmware *fw;
 	const __le16 *p;
@@ -147,11 +249,18 @@ static int s5k_write_table(struct s5k4ecgx *s5k, const char *name,
 	size_t i, n;
 	int ret;
 
-	ret = request_firmware(&fw, name, s5k->dev);
-	if (ret) {
-		dev_err(s5k->dev, "%s missing (extract it from the stock HAL)\n",
-			name);
-		return ret;
+	if (flags & S5K_TAB_OPTIONAL) {
+		ret = firmware_request_nowarn(&fw, name, s5k->dev);
+		if (ret)
+			return -ENOENT;
+	} else {
+		ret = request_firmware(&fw, name, s5k->dev);
+		if (ret) {
+			dev_err(s5k->dev,
+				"%s missing (extract it from the stock HAL)\n",
+				name);
+			return ret;
+		}
 	}
 	if (!fw->size || fw->size % 4) {
 		dev_err(s5k->dev, "%s: bad size %zu\n", name, fw->size);
@@ -173,7 +282,7 @@ static int s5k_write_table(struct s5k4ecgx *s5k, const char *name,
 		else if (reg == 0x002a)
 			addr = (addr & 0xffff0000) | val;
 		if (reg == 0x0f12) {
-			bool skip = skip_enable &&
+			bool skip = (flags & S5K_TAB_SKIP_ENABLE) &&
 				    (addr == S5K_G_ENABLE_PREV ||
 				     addr == S5K_G_ENABLE_PREV_CHG);
 
@@ -195,15 +304,178 @@ static int s5k_write_table(struct s5k4ecgx *s5k, const char *name,
 
 static int s5k_preview(struct s5k4ecgx *s5k, bool on)
 {
-	int ret = 0;
+	static const u32 addr[] = { S5K_G_ENABLE_PREV, S5K_G_ENABLE_PREV_CHG };
+	const u16 val[] = { on, 1 };
 
-	cci_write(s5k->regmap, S5K_REG_AHB_PAGE, S5K_AHB_PAGE, &ret);
-	if (!ret)
-		ret = s5k_write(s5k, S5K_G_ENABLE_PREV, on);
-	if (!ret)
-		ret = s5k_write(s5k, S5K_G_ENABLE_PREV_CHG, 1);
+	return s5k_write_words(s5k, addr, val, ARRAY_SIZE(addr));
+}
+
+/* the HAL's Capture_Start and Preview_Return */
+static int s5k_capture(struct s5k4ecgx *s5k, bool on)
+{
+	static const u32 addr[] = {
+		S5K_G_ENABLE_CAP, S5K_G_NEW_CFG_SYNC, S5K_G_ENABLE_CAP_CHG,
+	};
+	const u16 val[] = { on, 1, 1 };
+
+	return s5k_write_words(s5k, addr, val, ARRAY_SIZE(addr));
+}
+
+/* --- autofocus --------------------------------------------------------- */
+
+static int s5k_af_lens_home(struct s5k4ecgx *s5k)
+{
+	/* the HAL's AF_off: lens to position 0 of the current range */
+	static const u32 addr[] = { S5K_AF_CMD_PARAM, S5K_AF_CMD };
+	static const u16 val[] = { 0, S5K_AF_CMD_LENS };
+
+	return s5k_write_words(s5k, addr, val, ARRAY_SIZE(addr));
+}
+
+static void s5k_af_done(struct s5k4ecgx *s5k, u32 status)
+{
+	s5k->af_status = status;
+	s5k->af_phase = S5K_AF_IDLE;
+	dev_info(s5k->dev, "autofocus %s after %u ms\n",
+		 status == V4L2_AUTO_FOCUS_STATUS_REACHED ? "reached" : "failed",
+		 jiffies_to_msecs(jiffies - s5k->af_started));
+}
+
+/*
+ * One step of the HAL's single AF (_s5k4ec_AutoFocusDo): start, poll the
+ * coarse search until it reports "found", then the fine search until its
+ * busy byte clears. Returns the delay to the next step in ms, 0 when done.
+ */
+static int s5k_af_step(struct s5k4ecgx *s5k)
+{
+	static const u32 cmd = S5K_AF_CMD;
+	static const u16 single = S5K_AF_CMD_SINGLE;
+	u64 val = 0;
+	int ret;
+
+	switch (s5k->af_phase) {
+	case S5K_AF_START:
+		ret = s5k_write_words(s5k, &cmd, &single, 1);
+		if (ret)
+			break;
+		s5k->af_phase = S5K_AF_SEARCH;
+		s5k->af_polls = 0;
+		return 100;
+
+	case S5K_AF_SEARCH:
+		ret = s5k_read(s5k, S5K_AF_SEARCH_STATUS, &val);
+		if (ret)
+			break;
+		if (val == 2) {
+			s5k->af_phase = S5K_AF_FINE;
+			s5k->af_polls = 0;
+			return S5K_AF_POLL_MS;
+		}
+		if (val == 0 || val == 8) {
+			/* idle or cancelled: the HAL sends the start again */
+			if (!s5k->af_retries++) {
+				s5k->af_phase = S5K_AF_START;
+				return 1;
+			}
+		}
+		if (val != 1 || ++s5k->af_polls >= S5K_AF_SEARCH_POLLS) {
+			dev_dbg(s5k->dev, "AF search status %llu\n", val);
+			s5k_af_lens_home(s5k);
+			s5k_af_done(s5k, V4L2_AUTO_FOCUS_STATUS_FAILED);
+			return 0;
+		}
+		return S5K_AF_POLL_MS;
+
+	case S5K_AF_FINE:
+		ret = s5k_read(s5k, S5K_AF_FINE_STATUS, &val);
+		if (ret)
+			break;
+		/* the HAL also takes a timeout here as success */
+		if (!(val & 0xff00) || ++s5k->af_polls >= S5K_AF_FINE_POLLS) {
+			s5k_af_done(s5k, V4L2_AUTO_FOCUS_STATUS_REACHED);
+			return 0;
+		}
+		return S5K_AF_POLL_MS;
+
+	default:
+		return 0;
+	}
+
+	dev_err(s5k->dev, "autofocus: %d\n", ret);
+	s5k_af_done(s5k, V4L2_AUTO_FOCUS_STATUS_FAILED);
 	return ret;
 }
+
+static void s5k_af_work(struct work_struct *work)
+{
+	struct s5k4ecgx *s5k = container_of(to_delayed_work(work),
+					    struct s5k4ecgx, af_work);
+	int next;
+
+	mutex_lock(s5k->ctrls.lock);
+	/* stopped or streamoff in the meantime */
+	if (s5k->af_ok && s5k->af_phase != S5K_AF_IDLE) {
+		next = s5k_af_step(s5k);
+		if (next > 0)
+			schedule_delayed_work(&s5k->af_work,
+					      msecs_to_jiffies(next));
+	}
+	mutex_unlock(s5k->ctrls.lock);
+}
+
+static void s5k_af_begin(struct s5k4ecgx *s5k, unsigned int delay_ms)
+{
+	s5k->af_status = V4L2_AUTO_FOCUS_STATUS_BUSY;
+	s5k->af_phase = S5K_AF_START;
+	s5k->af_retries = 0;
+	s5k->af_started = jiffies + msecs_to_jiffies(delay_ms);
+	mod_delayed_work(system_percpu_wq, &s5k->af_work,
+			 msecs_to_jiffies(delay_ms));
+}
+
+/* the same, synchronously, under the control lock */
+static void s5k_af_sync(struct s5k4ecgx *s5k)
+{
+	int next;
+
+	s5k->af_status = V4L2_AUTO_FOCUS_STATUS_BUSY;
+	s5k->af_phase = S5K_AF_START;
+	s5k->af_retries = 0;
+	s5k->af_started = jiffies;
+	while ((next = s5k_af_step(s5k)) > 0)
+		msleep(next);
+}
+
+static int s5k_af_stop(struct s5k4ecgx *s5k)
+{
+	cancel_delayed_work(&s5k->af_work);
+	s5k->af_phase = S5K_AF_IDLE;
+	s5k->af_status = V4L2_AUTO_FOCUS_STATUS_IDLE;
+	return s5k->af_ok ? s5k_af_lens_home(s5k) : 0;
+}
+
+/* the HAL's AF_normal_mode_1..3 / AF_macro_mode_1..3, 100 ms apart */
+static int s5k_af_range(struct s5k4ecgx *s5k, int range)
+{
+	int macro = range == V4L2_AUTO_FOCUS_RANGE_MACRO;
+	const char *name = macro ? "s5k4ecgx/af-macro.bin" :
+				   "s5k4ecgx/af-normal.bin";
+	int ret;
+
+	if (!s5k->loaded || s5k->af_range == macro)
+		return 0;
+	ret = s5k_write_table(s5k, name, S5K_TAB_OPTIONAL);
+	if (ret == -ENOENT) {
+		dev_info_once(s5k->dev, "%s missing, AF range unchanged\n",
+			      name);
+		return 0;
+	}
+	if (!ret)
+		s5k->af_range = macro;
+	return ret;
+}
+
+/* --- power and streaming ----------------------------------------------- */
 
 static int s5k_power_on(struct device *dev)
 {
@@ -213,10 +485,16 @@ static int s5k_power_on(struct device *dev)
 
 	gpiod_set_value_cansleep(s5k->reset_gpio, 1);
 	gpiod_set_value_cansleep(s5k->powerdown_gpio, 1);
-	/* vendor order: I/O, analog, MCLK, then the external 1.2 V core */
+	/* vendor order: AF actuator, I/O, analog, MCLK, external 1.2 V core */
+	if (s5k->afvdd) {
+		ret = regulator_enable(s5k->afvdd);
+		if (ret)
+			return ret;
+		usleep_range(1000, 2000);
+	}
 	ret = regulator_enable(s5k->supplies[0].consumer);
 	if (ret)
-		return ret;
+		goto err_afvdd;
 	ret = regulator_enable(s5k->supplies[1].consumer);
 	if (ret)
 		goto err_dovdd;
@@ -240,6 +518,9 @@ err_avdd:
 	regulator_disable(s5k->supplies[1].consumer);
 err_dovdd:
 	regulator_disable(s5k->supplies[0].consumer);
+err_afvdd:
+	if (s5k->afvdd)
+		regulator_disable(s5k->afvdd);
 	return ret;
 }
 
@@ -255,7 +536,10 @@ static int s5k_power_off(struct device *dev)
 	clk_disable_unprepare(s5k->mclk);
 	regulator_disable(s5k->supplies[1].consumer);
 	regulator_disable(s5k->supplies[0].consumer);
+	if (s5k->afvdd)
+		regulator_disable(s5k->afvdd);
 	s5k->loaded = NULL;
+	s5k->still = NULL;
 	return 0;
 }
 
@@ -294,7 +578,7 @@ static int s5k_enum_frame_size(struct v4l2_subdev *sd,
 			       struct v4l2_subdev_frame_size_enum *fse)
 {
 	if (fse->code != MEDIA_BUS_FMT_UYVY8_1X16 ||
-	    fse->index >= ARRAY_SIZE(s5k_modes))
+	    fse->index >= s5k_num_modes())
 		return -EINVAL;
 	fse->min_width = fse->max_width = s5k_modes[fse->index].width;
 	fse->min_height = fse->max_height = s5k_modes[fse->index].height;
@@ -308,7 +592,7 @@ static int s5k_set_fmt(struct v4l2_subdev *sd,
 	struct s5k4ecgx *s5k = to_s5k(sd);
 	const struct s5k_mode *mode;
 
-	mode = v4l2_find_nearest_size(s5k_modes, ARRAY_SIZE(s5k_modes),
+	mode = v4l2_find_nearest_size(s5k_modes, s5k_num_modes(),
 				      width, height, format->format.width,
 				      format->format.height);
 	s5k_fill_fmt(mode, &format->format);
@@ -338,10 +622,103 @@ static int s5k_get_selection(struct v4l2_subdev *sd,
 	return -EINVAL;
 }
 
-/* powered, preview off: the lanes idle in LP-11 */
-static int s5k_pre_streamon(struct v4l2_subdev *sd, u32 flags)
+/* init (resets the ISP) and a size table, then the user controls again */
+static int s5k_load(struct s5k4ecgx *s5k, const struct s5k_mode *mode)
 {
-	struct s5k4ecgx *s5k = to_s5k(sd);
+	int ret;
+
+	if (s5k->loaded == mode)
+		return 0;
+	s5k->loaded = NULL;
+	s5k->still = NULL;
+	s5k->af_range = -1;
+	ret = s5k_write_table(s5k, "s5k4ecgx/init.bin", S5K_TAB_SKIP_ENABLE);
+	/* before the size table, which ends with the config sync */
+	if (!ret)
+		cci_write(s5k->regmap, S5K_REG_AHB_PAGE, S5K_AHB_PAGE, &ret);
+	if (!ret)
+		ret = s5k_write(s5k, S5K_PCFG0_MAX_FR_TIME, S5K_MAX_FR_TIME_15FPS);
+	if (!ret)
+		ret = s5k_write_table(s5k, mode->fw, S5K_TAB_SKIP_ENABLE);
+	if (ret)
+		return ret;
+	s5k->loaded = mode;
+	/* the init resets the adjustments too */
+	return __v4l2_ctrl_handler_setup(&s5k->ctrls);
+}
+
+/*
+ * Switch to the capture configuration of the current still mode, under
+ * the control lock and powered. Like the stock HAL (before_snapshot, then
+ * Capture_Start in stream_on), the capture size table is written while
+ * a preview runs, so that the capture takes over its exposure.
+ */
+static int s5k_still_start(struct s5k4ecgx *s5k)
+{
+	const struct s5k_mode *mode = s5k->mode;
+	unsigned long timeout;
+	u64 stable = 0;
+	int ret;
+
+	if (s5k->still == mode)
+		return 0;
+	s5k->loaded = NULL;	/* whatever ran before, start from the init */
+	ret = s5k_load(s5k, S5K_STILL_PREVIEW);
+	if (ret)
+		return ret;
+
+	if (still_settle_ms) {
+		ret = s5k_preview(s5k, true);
+		if (ret)
+			return ret;
+		msleep(still_settle_ms);
+		timeout = jiffies + msecs_to_jiffies(1000);
+		do {
+			ret = s5k_read(s5k, S5K_AE_STABLE, &stable);
+			if (ret || stable == 1)
+				break;
+			msleep(20);
+		} while (time_before(jiffies, timeout));
+		if (ret)
+			return ret;
+		if (still_af)
+			s5k_af_sync(s5k);
+	}
+
+	ret = s5k_write_table(s5k, mode->fw, 0);
+	if (!ret)
+		ret = s5k_capture(s5k, true);
+	if (ret)
+		return ret;
+	s5k->still = mode;
+	/* test build: say what the capture is based on */
+	dev_info(s5k->dev, "still %ux%u: settle %u ms, AE %s, AF %s\n",
+		 mode->width, mode->height, still_settle_ms,
+		 !still_settle_ms ? "-" : stable == 1 ? "stable" : "not stable",
+		 !still_settle_ms || !still_af ? "off" :
+		 s5k->af_status == V4L2_AUTO_FOCUS_STATUS_REACHED ? "reached" :
+								    "failed");
+	/* the switch takes effect at a frame boundary */
+	msleep(100);
+	return 0;
+}
+
+static int s5k_still_stop(struct s5k4ecgx *s5k)
+{
+	int ret;
+
+	if (!s5k->still)
+		return 0;
+	s5k->still = NULL;
+	s5k->loaded = NULL;	/* the next stream starts from the init */
+	ret = s5k_capture(s5k, false);
+	if (!ret)
+		ret = s5k_preview(s5k, false);
+	return ret;
+}
+
+static int s5k_get_power(struct s5k4ecgx *s5k)
+{
 	int ret;
 
 	if (s5k->powered)
@@ -353,14 +730,44 @@ static int s5k_pre_streamon(struct v4l2_subdev *sd, u32 flags)
 	return 0;
 }
 
-static int s5k_post_streamoff(struct v4l2_subdev *sd)
+static void s5k_put_power(struct s5k4ecgx *s5k)
 {
-	struct s5k4ecgx *s5k = to_s5k(sd);
-
 	if (s5k->powered) {
 		s5k->powered = false;
 		pm_runtime_put_autosuspend(s5k->dev);
 	}
+}
+
+/*
+ * Preview modes: powered, preview off, the lanes idle in LP-11. Still
+ * modes: already switched to capture and streaming.
+ */
+static int s5k_pre_streamon(struct v4l2_subdev *sd, u32 flags)
+{
+	struct s5k4ecgx *s5k = to_s5k(sd);
+	int ret;
+
+	ret = s5k_get_power(s5k);
+	if (ret)
+		return ret;
+	mutex_lock(s5k->ctrls.lock);
+	ret = s5k->mode->still ? s5k_still_start(s5k) : 0;
+	mutex_unlock(s5k->ctrls.lock);
+	if (ret)
+		s5k_put_power(s5k);
+	return ret;
+}
+
+static int s5k_post_streamoff(struct v4l2_subdev *sd)
+{
+	struct s5k4ecgx *s5k = to_s5k(sd);
+
+	/* a still started by pre_streamon that never got enable_streams */
+	mutex_lock(s5k->ctrls.lock);
+	if (s5k->still)
+		s5k_still_stop(s5k);
+	mutex_unlock(s5k->ctrls.lock);
+	s5k_put_power(s5k);
 	return 0;
 }
 
@@ -371,37 +778,46 @@ static int s5k_enable_streams(struct v4l2_subdev *sd,
 	struct s5k4ecgx *s5k = to_s5k(sd);
 	int ret;
 
-	ret = s5k_pre_streamon(sd, 0);
+	ret = s5k_get_power(s5k);
 	if (ret)
 		return ret;
+	/* normally streaming since pre_streamon */
+	if (s5k->mode->still)
+		return s5k_still_start(s5k);
+
 	/* the init resets the ISP; the size tables differ in more than size */
-	if (s5k->loaded != s5k->mode) {
-		s5k->loaded = NULL;
-		ret = s5k_write_table(s5k, "s5k4ecgx/init.bin", true);
-		/* before the size table, which ends with the config sync */
-		if (!ret)
-			cci_write(s5k->regmap, S5K_REG_AHB_PAGE, S5K_AHB_PAGE, &ret);
-		if (!ret)
-			ret = s5k_write(s5k, S5K_PCFG0_MAX_FR_TIME,
-					S5K_MAX_FR_TIME_15FPS);
-		if (!ret)
-			ret = s5k_write_table(s5k, s5k->mode->fw, true);
-		if (ret)
-			return ret;
-		s5k->loaded = s5k->mode;
-		/* the init resets the adjustments too */
-		ret = __v4l2_ctrl_handler_setup(&s5k->ctrls);
-		if (ret)
-			return ret;
-	}
-	return s5k_preview(s5k, true);
+	ret = s5k_load(s5k, s5k->mode);
+	if (!ret)
+		ret = s5k_preview(s5k, true);
+	if (ret)
+		return ret;
+	s5k->af_ok = true;
+	if (preview_af_ms)
+		s5k_af_begin(s5k, preview_af_ms);
+	return 0;
 }
 
 static int s5k_disable_streams(struct v4l2_subdev *sd,
 			       struct v4l2_subdev_state *state, u32 pad,
 			       u64 streams_mask)
 {
-	return s5k_preview(to_s5k(sd), false);
+	struct s5k4ecgx *s5k = to_s5k(sd);
+
+	/* the work sees af_ok cleared under the lock and does nothing */
+	s5k->af_ok = false;
+	s5k->af_phase = S5K_AF_IDLE;
+	s5k->af_status = V4L2_AUTO_FOCUS_STATUS_IDLE;
+	cancel_delayed_work(&s5k->af_work);
+	if (s5k->still)
+		return s5k_still_stop(s5k);
+	return s5k_preview(s5k, false);
+}
+
+/* HAL: two frames after a preview start, one after the capture switch */
+static int s5k_g_skip_frames(struct v4l2_subdev *sd, u32 *frames)
+{
+	*frames = to_s5k(sd)->mode->still ? still_skip : 2;
+	return 0;
 }
 
 static int s5k_s_ctrl(struct v4l2_ctrl *ctrl)
@@ -421,6 +837,16 @@ static int s5k_s_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_SATURATION:
 		addr = S5K_USER_SATURATION;
 		break;
+	case V4L2_CID_AUTO_FOCUS_RANGE:
+		return s5k_af_range(s5k, ctrl->val);
+	case V4L2_CID_AUTO_FOCUS_START:
+		/* the search works on the preview statistics */
+		if (!s5k->af_ok)
+			return -EBUSY;
+		s5k_af_begin(s5k, 0);
+		return 0;
+	case V4L2_CID_AUTO_FOCUS_STOP:
+		return s5k_af_stop(s5k);
 	default:
 		/* link frequency and pixel rate follow the mode */
 		return 0;
@@ -436,7 +862,18 @@ static int s5k_s_ctrl(struct v4l2_ctrl *ctrl)
 	return ret;
 }
 
+static int s5k_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct s5k4ecgx *s5k = container_of(ctrl->handler, struct s5k4ecgx,
+					    ctrls);
+
+	if (ctrl->id == V4L2_CID_AUTO_FOCUS_STATUS)
+		ctrl->val = s5k->af_status;
+	return 0;
+}
+
 static const struct v4l2_ctrl_ops s5k_ctrl_ops = {
+	.g_volatile_ctrl = s5k_g_volatile_ctrl,
 	.s_ctrl = s5k_s_ctrl,
 };
 
@@ -444,6 +881,10 @@ static const struct v4l2_subdev_video_ops s5k_video_ops = {
 	.s_stream = v4l2_subdev_s_stream_helper,
 	.pre_streamon = s5k_pre_streamon,
 	.post_streamoff = s5k_post_streamoff,
+};
+
+static const struct v4l2_subdev_sensor_ops s5k_sensor_ops = {
+	.g_skip_frames = s5k_g_skip_frames,
 };
 
 static const struct v4l2_subdev_pad_ops s5k_pad_ops = {
@@ -458,6 +899,7 @@ static const struct v4l2_subdev_pad_ops s5k_pad_ops = {
 
 static const struct v4l2_subdev_ops s5k_subdev_ops = {
 	.video = &s5k_video_ops,
+	.sensor = &s5k_sensor_ops,
 	.pad = &s5k_pad_ops,
 };
 
@@ -472,13 +914,25 @@ static int s5k_init_controls(struct s5k4ecgx *s5k)
 	struct v4l2_ctrl *ctrl;
 	int ret;
 
-	v4l2_ctrl_handler_init(hdl, 7);
+	v4l2_ctrl_handler_init(hdl, 11);
 	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_BRIGHTNESS,
 			  -127, 127, 1, 0);
 	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_CONTRAST,
 			  -127, 127, 1, 0);
 	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_SATURATION,
 			  -127, 127, 1, S5K_SATURATION_DEF);
+	v4l2_ctrl_new_std_menu(hdl, &s5k_ctrl_ops, V4L2_CID_AUTO_FOCUS_RANGE,
+			       V4L2_AUTO_FOCUS_RANGE_MACRO, 0,
+			       V4L2_AUTO_FOCUS_RANGE_AUTO);
+	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_AUTO_FOCUS_START,
+			  0, 0, 0, 0);
+	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_AUTO_FOCUS_STOP,
+			  0, 0, 0, 0);
+	/* read-only and volatile by definition */
+	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_AUTO_FOCUS_STATUS,
+			  0, V4L2_AUTO_FOCUS_STATUS_BUSY |
+			  V4L2_AUTO_FOCUS_STATUS_REACHED |
+			  V4L2_AUTO_FOCUS_STATUS_FAILED, 0, 0);
 	ctrl = v4l2_ctrl_new_int_menu(hdl, &s5k_ctrl_ops, V4L2_CID_LINK_FREQ,
 				      0, 0, s5k_link_freqs);
 	if (ctrl)
@@ -533,6 +987,8 @@ static int s5k_probe(struct i2c_client *client)
 		return -ENOMEM;
 	s5k->dev = dev;
 	s5k->mode = &s5k_modes[0];
+	s5k->af_range = -1;
+	INIT_DELAYED_WORK(&s5k->af_work, s5k_af_work);
 	v4l2_i2c_subdev_init(&s5k->sd, client, &s5k_subdev_ops);
 	s5k->sd.internal_ops = &s5k_internal_ops;
 
@@ -565,6 +1021,13 @@ static int s5k_probe(struct i2c_client *client)
 				      s5k->supplies);
 	if (ret)
 		return dev_err_probe(dev, ret, "supplies\n");
+	s5k->afvdd = devm_regulator_get_optional(dev, "afvdd");
+	if (IS_ERR(s5k->afvdd)) {
+		if (PTR_ERR(s5k->afvdd) != -ENODEV)
+			return dev_err_probe(dev, PTR_ERR(s5k->afvdd),
+					     "afvdd\n");
+		s5k->afvdd = NULL;
+	}
 
 	ret = s5k_power_on(dev);
 	if (ret)
@@ -606,7 +1069,8 @@ static int s5k_probe(struct i2c_client *client)
 		goto err_pm;
 
 	pm_runtime_put_autosuspend(dev);
-	dev_info(dev, "S5K4ECGX id %#llx rev %#llx\n", id, rev);
+	dev_info(dev, "S5K4ECGX id %#llx rev %#llx%s\n", id, rev,
+		 s5k->afvdd ? ", AF supply" : "");
 	return 0;
 
 err_pm:
@@ -629,6 +1093,7 @@ static void s5k_remove(struct i2c_client *client)
 	struct s5k4ecgx *s5k = to_s5k(sd);
 
 	v4l2_async_unregister_subdev(sd);
+	cancel_delayed_work_sync(&s5k->af_work);
 	v4l2_subdev_cleanup(sd);
 	media_entity_cleanup(&sd->entity);
 	v4l2_ctrl_handler_free(&s5k->ctrls);

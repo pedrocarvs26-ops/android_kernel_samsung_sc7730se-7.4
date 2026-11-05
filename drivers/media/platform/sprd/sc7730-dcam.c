@@ -14,6 +14,13 @@
  * at the next one (auto copy), as in the vendor driver. A scratch buffer
  * takes frames for which user space has queued nothing.
  *
+ * Path 1 has a 2048 pixel line buffer, path 2 one of 4096; frames wider
+ * than 2048 (the 5 MP stills of the rear camera) go through path 2, with
+ * the scaler bypassed as well (module parameter path_sel to override).
+ * The vendor never ran path 2 in bypass: it always trimmed one line and
+ * scaled it back (path2_crop to trim lines without scaling). The number
+ * of frames to drop after the start comes from the sensor.
+ *
  * Port 0 is D-PHY A (2 lanes, the rear camera), port 1 D-PHY C (1 lane,
  * the front camera); only one sensor streams at a time, chosen through
  * the media links. The sensor master clock (MCLK, 24 MHz) lives in the MM
@@ -47,46 +54,32 @@
 
 /* DCAM */
 #define DCAM_CFG		0x00
-#define  CFG_PATH1_EN		BIT(1)
 #define  CFG_CSI2_IN		BIT(9)
-#define  CFG_PATH1_SRC		GENMASK(12, 11)
 #define DCAM_CONTROL		0x04
 #define  CTL_CAP_FORCE_COPY	BIT(0)
 #define  CTL_CAP_EN		BIT(2)
-#define  CTL_PATH1_FORCE_COPY	BIT(10)
-#define  CTL_PATH1_AUTO_COPY	BIT(11)
-#define  CTL_PATH1_COEF_FORCE	BIT(14)
-#define PATH1_CFG		0x10
-#define  P1_OUT_FMT		GENMASK(7, 6)	/* 0 YUV422, 1 YUV420, 2-plane */
-#define  P1_UV_TAP		GENMASK(15, 11)
-#define  P1_Y_TAP		GENMASK(19, 16)
-#define  P1_SCALER_BYPASS	BIT(20)
-#define PATH1_SRC_SIZE		0x14
-#define PATH1_DST_SIZE		0x18
-#define PATH1_TRIM_START	0x1c
-#define PATH1_TRIM_SIZE		0x20
+/* path 1 at 0x10, path 2 at 0x24 */
+#define PATH_CFG		0x00
+#define  P_OUT_FMT		GENMASK(7, 6)	/* 0 YUV422, 1 YUV420, 2-plane */
+#define  P_UV_TAP		GENMASK(15, 11)
+#define  P_Y_TAP		GENMASK(19, 16)
+#define  P_SCALER_BYPASS	BIT(20)
+#define PATH_SRC_SIZE		0x04
+#define PATH_DST_SIZE		0x08
+#define PATH_TRIM_START		0x0c
+#define PATH_TRIM_SIZE		0x10
 #define INT_STS			0x3c
 #define INT_MASK		0x40
 #define INT_CLR			0x44
-#define  INT_PATH1_DONE		BIT(6)
-#define  INT_PATH1_OV		BIT(7)
 #define  INT_SN_LINE_ERR	BIT(10)
 #define  INT_SN_FRAME_ERR	BIT(11)
 #define  INT_MIPI_OV		BIT(14)
-#define  INT_PATH1_SOF		BIT(19)
 #define  INT_ALL		GENMASK(20, 0)
-#define  INT_ERRORS		(INT_PATH1_OV | INT_SN_LINE_ERR | \
-				 INT_SN_FRAME_ERR | INT_MIPI_OV)
-#define FRM_ADDR1		0x50	/* path1 Y */
-#define FRM_ADDR2		0x54	/* path1 CbCr */
 #define ENDIAN_SEL		0x6c
-#define  ENDIAN_P1_LITTLE	(BIT(6) | BIT(8))
 #define  ENDIAN_AXI		(BIT(18) | BIT(19))
 #define AHBM_STS		0x70
 #define  AHBM_BUSY		BIT(0)
-#define  AHBM_PATH1_STOP	BIT(4)
 #define  AHBM_WR_ARBIT		BIT(8)
-#define  AHBM_PATH1_BUSY	BIT(17)
 #define CAP_MIPI_CTRL		0x128
 #define  CAP_MULTI_FRAME	BIT(6)
 #define  CAP_YUV_ORDER		GENMASK(8, 7)	/* 2 = UYVY */
@@ -96,9 +89,10 @@
 #define CAP_MIPI_START		0x130
 #define CAP_MIPI_END		0x134
 #define CAP_MIPI_IMG_DECI	0x138
-#define SC1_COEF_H		0x400	/* path1 scaler coefficient RAM */
-#define SC1_COEF_V		0x4f0
-#define SC1_COEF_VC		0x8f0
+/* scaler coefficient RAM: path 1 at 0x400, path 2 at 0x1400 */
+#define SC_COEF_H		0x000
+#define SC_COEF_V		0x0f0
+#define SC_COEF_VC		0x4f0
 
 /* CSI-2 host */
 #define CSI_VERSION		0x00
@@ -127,7 +121,6 @@
 #define  RST_DCAM		BIT(0)
 #define  RST_CCIR		BIT(1)
 #define  RST_CSI		BIT(5)
-#define  RST_PATH1		BIT(8)
 #define MM_GEN_CKG		0x08
 #define  CKG_CPHY_CFG		BIT(0)
 #define  CKG_MIPI_CSI		BIT(1)
@@ -151,8 +144,53 @@
 #define  PWR_CSI0_PHY_PD	BIT(10)
 
 #define DCAM_MCLK_HZ		24000000
-#define DCAM_MAX_WIDTH		2048	/* path1 line buffer */
+#define DCAM_PATH1_MAX_WIDTH	2048	/* line buffer; path2: 4096 */
+#define DCAM_MAX_WIDTH		4092	/* capture window */
 #define DCAM_MAX_HEIGHT		4092
+
+/* the two scaling paths, from the vendor sc8830g/dcam_drv.c */
+struct dcam_path {
+	unsigned int id;
+	u32 regs;		/* PATH_CFG .. PATH_TRIM_SIZE */
+	u32 addr_y, addr_uv;	/* FRM_ADDR1/2, FRM_ADDR4/5 */
+	u32 cfg_en, cfg_src;	/* DCAM_CFG */
+	u32 force_copy, auto_copy, coef_force;	/* DCAM_CONTROL */
+	u32 endian_little;	/* ENDIAN_SEL Y and UV fields */
+	u32 ahbm_stop, ahbm_busy;
+	u32 int_done, int_ov, int_sof;
+	u32 rst;		/* MM_AHB_RST */
+	u32 coef;		/* scaler coefficient RAM */
+};
+
+static const struct dcam_path dcam_paths[] = {
+	{
+		.id = 1, .regs = 0x10, .addr_y = 0x50, .addr_uv = 0x54,
+		.cfg_en = BIT(1), .cfg_src = GENMASK(12, 11),
+		.force_copy = BIT(10), .auto_copy = BIT(11),
+		.coef_force = BIT(14),
+		.endian_little = BIT(6) | BIT(8),
+		.ahbm_stop = BIT(4), .ahbm_busy = BIT(17),
+		.int_done = BIT(6), .int_ov = BIT(7), .int_sof = BIT(19),
+		.rst = BIT(8), .coef = 0x400,
+	}, {
+		.id = 2, .regs = 0x24, .addr_y = 0x5c, .addr_uv = 0x60,
+		.cfg_en = BIT(2), .cfg_src = GENMASK(14, 13),
+		.force_copy = BIT(12), .auto_copy = BIT(13),
+		.coef_force = BIT(16),
+		.endian_little = BIT(10) | BIT(12),
+		.ahbm_stop = BIT(5), .ahbm_busy = BIT(18),
+		.int_done = BIT(8), .int_ov = BIT(9), .int_sof = BIT(20),
+		.rst = BIT(9), .coef = 0x1400,
+	},
+};
+
+static int path_sel;
+module_param(path_sel, int, 0644);
+MODULE_PARM_DESC(path_sel, "0: path 1 up to 2048 pixels wide, path 2 above; 1 or 2: always that path");
+
+static unsigned int path2_crop;
+module_param(path2_crop, uint, 0644);
+MODULE_PARM_DESC(path2_crop, "Lines trimmed off the bottom on path 2, scaler still bypassed (even)");
 
 enum { DCAM_PORT_PHY_A, DCAM_PORT_PHY_C, DCAM_NUM_PORTS };
 
@@ -182,6 +220,9 @@ struct dcam {
 	struct v4l2_async_notifier notifier;
 	struct dcam_sensor sensors[DCAM_NUM_PORTS];
 	struct dcam_sensor *active;	/* streaming sensor */
+	const struct dcam_path *path;	/* in use while streaming */
+	u32 int_errors;
+	u32 skip;			/* frames dropped after the start */
 
 	struct video_device vdev;
 	struct media_pad pad;
@@ -405,8 +446,16 @@ static void dcam_csi_stop(struct dcam *d, struct dcam_sensor *s)
 
 static void dcam_set_addr(struct dcam *d, dma_addr_t addr)
 {
-	writel(addr, d->base + FRM_ADDR1);
-	writel(addr + d->fmt.width * d->fmt.height, d->base + FRM_ADDR2);
+	writel(addr, d->base + d->path->addr_y);
+	writel(addr + d->fmt.width * d->fmt.height,
+	       d->base + d->path->addr_uv);
+}
+
+static const struct dcam_path *dcam_pick_path(struct dcam *d)
+{
+	if (path_sel == 1 || path_sel == 2)
+		return &dcam_paths[path_sel - 1];
+	return &dcam_paths[d->fmt.width > DCAM_PATH1_MAX_WIDTH];
 }
 
 static dma_addr_t dcam_buf_addr(struct dcam *d, struct dcam_buf *buf)
@@ -477,7 +526,10 @@ static void dcam_load_coef(struct dcam *d, u32 off, const u32 *coef,
 
 static void dcam_hw_start(struct dcam *d)
 {
+	const struct dcam_path *p = d->path;
+	void __iomem *regs = d->base + p->regs;
 	u32 size = d->fmt.width | d->fmt.height << 16;
+	u32 out = size;
 	unsigned long flags;
 	u32 v;
 
@@ -487,35 +539,39 @@ static void dcam_hw_start(struct dcam *d)
 	dcam_rmw(d->mmahb + MM_AHB_RST, RST_DCAM | RST_CCIR, 0);
 	writel(INT_ALL, d->base + INT_CLR);
 
-	dcam_rmw(d->base + DCAM_CFG, CFG_PATH1_SRC, CFG_CSI2_IN);
+	/* the path's source is the capture block (0), not the ISP */
+	dcam_rmw(d->base + DCAM_CFG, p->cfg_src, CFG_CSI2_IN);
 	writel(CAP_MULTI_FRAME | FIELD_PREP(CAP_YUV_ORDER, 2),
 	       d->base + CAP_MIPI_CTRL);
-	writel(FIELD_PREP(CAP_PRE_SKIP, 2) | CAP_CLR_COUNT,
+	writel(FIELD_PREP(CAP_PRE_SKIP, d->skip) | CAP_CLR_COUNT,
 	       d->base + CAP_MIPI_FRM_CTRL);
 	writel(0, d->base + CAP_MIPI_START);
 	writel((d->fmt.width - 1) | (d->fmt.height - 1) << 16,
 	       d->base + CAP_MIPI_END);
 	writel(0, d->base + CAP_MIPI_IMG_DECI);
 
-	writel(size, d->base + PATH1_SRC_SIZE);
-	writel(0, d->base + PATH1_TRIM_START);
-	writel(size, d->base + PATH1_TRIM_SIZE);
-	writel(size, d->base + PATH1_DST_SIZE);
+	/* trim = destination keeps the scale at 1:1 */
+	if (p->id == 2 && path2_crop && path2_crop < d->fmt.height / 2)
+		out = d->fmt.width | (d->fmt.height - (path2_crop & ~1)) << 16;
+	writel(size, regs + PATH_SRC_SIZE);
+	writel(0, regs + PATH_TRIM_START);
+	writel(out, regs + PATH_TRIM_SIZE);
+	writel(out, regs + PATH_DST_SIZE);
 	if (d->fmt.pixelformat == V4L2_PIX_FMT_NV12) {
 		/* the scaler at 1:1 does the 4:2:0 chroma decimation */
-		dcam_load_coef(d, SC1_COEF_H, dcam_sc_coef_h,
+		dcam_load_coef(d, p->coef + SC_COEF_H, dcam_sc_coef_h,
 			       ARRAY_SIZE(dcam_sc_coef_h));
-		dcam_load_coef(d, SC1_COEF_V, dcam_sc_coef_v,
+		dcam_load_coef(d, p->coef + SC_COEF_V, dcam_sc_coef_v,
 			       ARRAY_SIZE(dcam_sc_coef_v));
-		dcam_load_coef(d, SC1_COEF_VC, dcam_sc_coef_vc,
+		dcam_load_coef(d, p->coef + SC_COEF_VC, dcam_sc_coef_vc,
 			       ARRAY_SIZE(dcam_sc_coef_vc));
-		writel(FIELD_PREP(P1_OUT_FMT, 1) |
-		       FIELD_PREP(P1_UV_TAP, DCAM_SC_TAP) |
-		       FIELD_PREP(P1_Y_TAP, DCAM_SC_TAP), d->base + PATH1_CFG);
+		writel(FIELD_PREP(P_OUT_FMT, 1) |
+		       FIELD_PREP(P_UV_TAP, DCAM_SC_TAP) |
+		       FIELD_PREP(P_Y_TAP, DCAM_SC_TAP), regs + PATH_CFG);
 	} else {
-		writel(P1_SCALER_BYPASS, d->base + PATH1_CFG);
+		writel(P_SCALER_BYPASS, regs + PATH_CFG);
 	}
-	dcam_rmw(d->base + ENDIAN_SEL, 0, ENDIAN_P1_LITTLE | ENDIAN_AXI);
+	dcam_rmw(d->base + ENDIAN_SEL, 0, p->endian_little | ENDIAN_AXI);
 
 	spin_lock_irqsave(&d->qlock, flags);
 	d->cur = dcam_take_buf(d);
@@ -526,31 +582,31 @@ static void dcam_hw_start(struct dcam *d)
 	dcam_set_addr(d, dcam_buf_addr(d, d->cur));
 	spin_unlock_irqrestore(&d->qlock, flags);
 
-	writel(INT_PATH1_DONE | INT_PATH1_SOF | INT_ERRORS, d->base + INT_MASK);
+	writel(p->int_done | p->int_sof | d->int_errors, d->base + INT_MASK);
 	enable_irq(d->irq);
 	dcam_rmw(d->base + AHBM_STS, 0, AHBM_WR_ARBIT);
-	dcam_rmw(d->base + DCAM_CONTROL, 0,
-		 CTL_PATH1_FORCE_COPY | CTL_PATH1_COEF_FORCE);
-	dcam_rmw(d->base + DCAM_CFG, 0, CFG_PATH1_EN);
+	dcam_rmw(d->base + DCAM_CONTROL, 0, p->force_copy | p->coef_force);
+	dcam_rmw(d->base + DCAM_CFG, 0, p->cfg_en);
 	dcam_rmw(d->base + DCAM_CONTROL, 0, CTL_CAP_FORCE_COPY);
 	dcam_rmw(d->base + DCAM_CONTROL, 0, CTL_CAP_EN);
 }
 
 static void dcam_hw_stop(struct dcam *d)
 {
+	const struct dcam_path *p = d->path;
 	u32 v;
 
 	writel(0, d->base + INT_MASK);
 	dcam_rmw(d->base + DCAM_CONTROL, CTL_CAP_EN, 0);
-	dcam_rmw(d->base + AHBM_STS, 0, AHBM_PATH1_STOP);
+	dcam_rmw(d->base + AHBM_STS, 0, p->ahbm_stop);
 	udelay(10);
-	dcam_rmw(d->base + DCAM_CFG, CFG_PATH1_EN, 0);
-	dcam_rmw(d->base + DCAM_CONTROL, 0, CTL_PATH1_FORCE_COPY);
-	readl_poll_timeout(d->base + AHBM_STS, v, !(v & AHBM_PATH1_BUSY),
+	dcam_rmw(d->base + DCAM_CFG, p->cfg_en, 0);
+	dcam_rmw(d->base + DCAM_CONTROL, 0, p->force_copy);
+	readl_poll_timeout(d->base + AHBM_STS, v, !(v & p->ahbm_busy),
 			   10, 10000);
-	dcam_rmw(d->mmahb + MM_AHB_RST, 0, RST_PATH1);
+	dcam_rmw(d->mmahb + MM_AHB_RST, 0, p->rst);
 	udelay(1);
-	dcam_rmw(d->mmahb + MM_AHB_RST, RST_PATH1, 0);
+	dcam_rmw(d->mmahb + MM_AHB_RST, p->rst, 0);
 	writel(INT_ALL, d->base + INT_CLR);
 	disable_irq(d->irq);
 }
@@ -567,6 +623,7 @@ static void dcam_buf_complete(struct dcam *d, struct dcam_buf *buf,
 static irqreturn_t dcam_irq(int irq, void *data)
 {
 	struct dcam *d = data;
+	const struct dcam_path *p = d->path;
 	u32 sts = readl(d->base + INT_STS);
 
 	if (!sts)
@@ -574,22 +631,22 @@ static irqreturn_t dcam_irq(int irq, void *data)
 	writel(sts, d->base + INT_CLR);
 
 	spin_lock(&d->qlock);
-	if (sts & INT_ERRORS) {
+	if (sts & d->int_errors) {
 		if (!d->errors++)
 			dev_warn(d->dev, "capture error %#x, CSI ERR1 %#x\n",
 				 sts, readl(d->csi + CSI_ERR1));
 	}
 	/* the frame in cur is complete */
-	if (sts & INT_PATH1_DONE) {
+	if (sts & p->int_done) {
 		if (d->cur)
-			dcam_buf_complete(d, d->cur, sts & INT_ERRORS ?
+			dcam_buf_complete(d, d->cur, sts & d->int_errors ?
 					  VB2_BUF_STATE_ERROR :
 					  VB2_BUF_STATE_DONE);
 		d->cur = NULL;
 		d->sequence++;
 	}
 	/* a new frame starts: it uses what latched; queue the one after */
-	if (sts & INT_PATH1_SOF) {
+	if (sts & p->int_sof) {
 		if (d->next_valid) {
 			/* no DONE for the previous frame: dropped, reuse it */
 			if (d->cur)
@@ -600,7 +657,7 @@ static irqreturn_t dcam_irq(int irq, void *data)
 		d->next = dcam_take_buf(d);
 		d->next_valid = true;
 		dcam_set_addr(d, dcam_buf_addr(d, d->next));
-		dcam_rmw(d->base + DCAM_CONTROL, 0, CTL_PATH1_AUTO_COPY);
+		dcam_rmw(d->base + DCAM_CONTROL, 0, p->auto_copy);
 	}
 	spin_unlock(&d->qlock);
 	return IRQ_HANDLED;
@@ -692,6 +749,7 @@ static int dcam_start_streaming(struct vb2_queue *q, unsigned int count)
 	struct media_pad *remote;
 	unsigned int i;
 	s64 link_freq;
+	u32 skip = 2;
 	int ret;
 
 	remote = media_pad_remote_pad_first(&d->pad);
@@ -723,7 +781,11 @@ static int dcam_start_streaming(struct vb2_queue *q, unsigned int count)
 	if (ret)
 		goto err_scratch;
 
-	/* sensor configured and asleep: lanes in LP-11 for the D-PHY */
+	/*
+	 * Sensor configured and asleep: lanes in LP-11 for the D-PHY. A
+	 * sensor that must switch modes while streaming (S5K4ECGX stills)
+	 * streams already; the vendor always started the PHY like that.
+	 */
 	ret = v4l2_subdev_call(s->sd, video, pre_streamon,
 			       V4L2_SUBDEV_PRE_STREAMON_FL_MANUAL_LP);
 	if (ret && ret != -ENOIOCTLCMD)
@@ -737,6 +799,18 @@ static int dcam_start_streaming(struct vb2_queue *q, unsigned int count)
 	ret = dcam_csi_start(d, s, link_freq);
 	if (ret)
 		goto err_post;
+
+	v4l2_subdev_call(s->sd, sensor, g_skip_frames, &skip);
+	d->skip = min(skip, 15U);
+	d->path = dcam_pick_path(d);
+	d->int_errors = d->path->int_ov | INT_SN_LINE_ERR | INT_SN_FRAME_ERR |
+			INT_MIPI_OV;
+	/* test build: anything but the proven preview setup */
+	if (d->path->id != 1 || d->fmt.width > DCAM_PATH1_MAX_WIDTH ||
+	    d->skip != 2)
+		dev_info(d->dev, "%ux%u through path %u, skip %u, PHY_STATE %#x\n",
+			 d->fmt.width, d->fmt.height, d->path->id, d->skip,
+			 readl(d->csi + CSI_PHY_STATE));
 
 	d->active = s;
 	dcam_hw_start(d);
