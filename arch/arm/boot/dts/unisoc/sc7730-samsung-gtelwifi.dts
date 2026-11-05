@@ -232,6 +232,7 @@
 		mmc2 = &sdio0;
 		serial0 = &uart0;
 		serial1 = &uart1;
+		serial3 = &uart3;
 	};
 
 	chosen {
@@ -350,6 +351,50 @@
 		gpio = <&gpio 193 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 		startup-delay-us = <1000>;
+	};
+
+	/*
+	 * Broadcom BCM47520 GPS (vendor "broadcom,bcm47520"): a hosted GNSS on
+	 * UART3, the position engine is the proprietary glgps daemon. The
+	 * vendor driver turned on LDO_CAMD (1.8 V) and the TCXO supply LDO_SDIO
+	 * (3.3 V, nothing else on it) at probe and left GPS_PWR_EN (GPIO 168,
+	 * nStandby) to glgps through a sysfs file. Here LDO_CAMD stays on, and
+	 * the TCXO supply and GPS_PWR_EN switch together through a regulator
+	 * output whose "state" file glgps writes 1/0 to (GpioNStdbyPath, it
+	 * waits 250 ms after power-up).
+	 */
+	vddcamd: regulator-vddcamd {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddcamd";
+		sprd,pd-reg = <0x814 5>;
+		sprd,vsel-reg = <0x81c 0x7f>;
+		sprd,min-microvolt = <1150000>;
+		sprd,step-microvolt = <6250>;
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
+	};
+
+	vddsdio: regulator-vddsdio {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddsdio";
+		sprd,pd-reg = <0x814 0>;
+		sprd,vsel-reg = <0x828 0xff>;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+	};
+
+	gps_pwr_en: regulator-gps-pwr-en {
+		compatible = "regulator-fixed";
+		regulator-name = "gps_pwr_en";
+		gpio = <&gpio 168 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&vddsdio>;
+	};
+
+	gps-power {
+		compatible = "regulator-output";
+		vout-supply = <&gps_pwr_en>;
 	};
 
 	backlight: backlight {
@@ -493,6 +538,11 @@
 		clock-names = "lpo";
 		max-speed = <2000000>;
 	};
+};
+
+/* BCM47520 GPS, 921600 baud set by glgps (gps.xml) */
+&uart3 {
+	status = "okay";
 };
 
 &gpu {
