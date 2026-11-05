@@ -183,7 +183,7 @@ struct s5k4ecgx {
 	bool powered;			/* by pre_streamon */
 
 	/* under the control handler lock, as all access to the ISP */
-	bool af_ok;			/* a preview is running */
+	bool af_ok;			/* a preview or still stream runs */
 	int af_range;			/* lens table in the ISP: 0 normal, 1 macro */
 	unsigned int af_phase, af_polls, af_retries;
 	u32 af_status;			/* V4L2_AUTO_FOCUS_STATUS_* */
@@ -781,9 +781,17 @@ static int s5k_enable_streams(struct v4l2_subdev *sd,
 	ret = s5k_get_power(s5k);
 	if (ret)
 		return ret;
-	/* normally streaming since pre_streamon */
-	if (s5k->mode->still)
-		return s5k_still_start(s5k);
+	/*
+	 * Normally streaming since pre_streamon. The AF engine keeps
+	 * running in the capture configuration, so an autofocus can be
+	 * started there as well (tap to focus while a still stream runs).
+	 */
+	if (s5k->mode->still) {
+		ret = s5k_still_start(s5k);
+		if (!ret)
+			s5k->af_ok = true;
+		return ret;
+	}
 
 	/* the init resets the ISP; the size tables differ in more than size */
 	ret = s5k_load(s5k, s5k->mode);
@@ -928,11 +936,16 @@ static int s5k_init_controls(struct s5k4ecgx *s5k)
 			  0, 0, 0, 0);
 	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_AUTO_FOCUS_STOP,
 			  0, 0, 0, 0);
-	/* read-only and volatile by definition */
-	v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_AUTO_FOCUS_STATUS,
-			  0, V4L2_AUTO_FOCUS_STATUS_BUSY |
-			  V4L2_AUTO_FOCUS_STATUS_REACHED |
-			  V4L2_AUTO_FOCUS_STATUS_FAILED, 0, 0);
+	/*
+	 * Read-only by definition, but not volatile: without the flag the
+	 * core returns the initial value instead of calling g_volatile_ctrl.
+	 */
+	ctrl = v4l2_ctrl_new_std(hdl, &s5k_ctrl_ops, V4L2_CID_AUTO_FOCUS_STATUS,
+				 0, V4L2_AUTO_FOCUS_STATUS_BUSY |
+				 V4L2_AUTO_FOCUS_STATUS_REACHED |
+				 V4L2_AUTO_FOCUS_STATUS_FAILED, 0, 0);
+	if (ctrl)
+		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
 	ctrl = v4l2_ctrl_new_int_menu(hdl, &s5k_ctrl_ops, V4L2_CID_LINK_FREQ,
 				      0, 0, s5k_link_freqs);
 	if (ctrl)
