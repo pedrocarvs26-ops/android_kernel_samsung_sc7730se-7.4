@@ -280,14 +280,16 @@
 		};
 
 		/*
-		 * Scan-out and GPU buffers for DISPC, which has no IOMMU. Kept in
-		 * lowmem below the vendor's carve-outs, where all vendor display
-		 * buffers lived.
+		 * Scan-out and GPU buffers for DISPC, which has no IOMMU, and the
+		 * camera buffers (DCAM has none either: a 2576x1932 still is
+		 * 7.5 MB in NV12, libcamera queues four plus the driver's
+		 * scratch frame). Kept in lowmem below the vendor's carve-outs,
+		 * where all vendor display buffers lived.
 		 */
 		linux,cma {
 			compatible = "shared-dma-pool";
 			reusable;
-			size = <0x4000000>;
+			size = <0x8000000>;
 			alloc-ranges = <0x90000000 0xe000000>;
 			linux,cma-default;
 		};
@@ -340,6 +342,16 @@
 		sprd,step-microvolt = <6250>;
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <1800000>;
+	};
+
+	/* rear camera autofocus actuator, 2.8 V; 0x834[15:8] is the eMMC core */
+	vddcammot: regulator-vddcammot {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddcammot";
+		sprd,pd-reg = <0x814 7>;
+		sprd,vsel-reg = <0x834 0xff>;
+		regulator-min-microvolt = <2800000>;
+		regulator-max-microvolt = <2800000>;
 	};
 
 	/* external 1.2 V core supply of the rear camera */
@@ -423,6 +435,8 @@
  * on the left of the rear image and on the right of the front image.
  */
 &i2c0 {
+	/* the stock HAL switches the bus to 400 kHz for both sensors */
+	clock-frequency = <400000>;
 	status = "okay";
 
 	camera@20 {
@@ -451,6 +465,7 @@
 		avdd-supply = <&vddcama>;
 		dovdd-supply = <&vddcamio>;
 		dvdd-supply = <&cam_dvdd>;
+		afvdd-supply = <&vddcammot>;
 		reset-gpios = <&gpio 186 GPIO_ACTIVE_LOW>;
 		powerdown-gpios = <&gpio 188 GPIO_ACTIVE_LOW>;
 		orientation = <1>;
