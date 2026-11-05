@@ -668,5 +668,14 @@
 			clock-names = "enable", "uart";
 			status = "disabled";
 		};
+
+		uart3: serial@70300000 {
+			compatible = "sprd,sc9836-uart";
+			reg = <0x70300000 0x100>;
+			interrupts = <GIC_SPI 5 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ap_apb_gates 16>, <&ext_26m>;
+			clock-names = "enable", "uart";
+			status = "disabled";
+		};
 	};
 };
