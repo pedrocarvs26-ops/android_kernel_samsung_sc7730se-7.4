@@ -24,8 +24,16 @@
  * Suspend to "mem" is the vendor's standby for now: the PM core takes
  * CPU1-3 offline, which powers them down (platsmp.c), and CPU0 waits in
  * WFI for a wakeup interrupt. DDR, the GIC and the counter stay powered.
- * The vendor's deep sleep (DDR self-refresh, CA7 power-down, resume from
- * IRAM) is not there yet.
+ * While CPU0 waits, the DDR controller (Synopsys uMCTL2) may put the DRAM
+ * into self-refresh after its idle timeout (PWRTMG, set by the SPL) and
+ * takes it out on the next access, as in the vendor's suspend: only PWRCTL
+ * changes, no code runs from IRAM. Measured with the panel off: 89 -> 88
+ * mA; the controller already powers the DRAM down when idle. The vendor's
+ * light-sleep bits (MCU_PAUSE SYS/LIGHT_SLEEP with the AON wake mux) gave
+ * nothing measurable while peripheral clocks run, and the core clock
+ * auto gate stops the CPU's view of the system counter (lost time). The
+ * vendor's deep sleep (peripheral gating, CA7 power-down, DDR PHY
+ * retention, resume from IRAM) is not there yet.
  *
  * The CPU OPP table goes beyond the vendor's 1300 MHz (overclocking steps
  * checked on a single unit), so every new cpufreq policy gets a maximum
@@ -61,6 +69,10 @@
 #define CA7_TS1_PHYS		0x40410000
 #define TS_CNTCR_EN		BIT(0)
 #define AP_AHB_PHYS		0x20d00000
+#define UMCTL2_PHYS		0x30000000
+#define UMCTL2_PWRCTL		0x30
+#define PWRCTL_SELFREF_EN	BIT(0)
+#define PWRCTL_POWERDOWN_EN	BIT(1)
 #define AP_SYS_AUTO_SLEEP_CFG	0x10
 #define CA7_CORE_AUTO_GATE_EN	BIT(0)
 
@@ -111,9 +123,26 @@ static void __init sc7730_init_time(void)
 }
 
 #ifdef CONFIG_SUSPEND
+static void __iomem *sc7730_umctl2;
+
+static bool ddr_selfref = true;
+module_param(ddr_selfref, bool, 0644);
+MODULE_PARM_DESC(ddr_selfref, "DDR self-refresh while suspended");
+
 static int sc7730_suspend_enter(suspend_state_t state)
 {
+	void __iomem *pwrctl = sc7730_umctl2 + UMCTL2_PWRCTL;
+	bool selfref = sc7730_umctl2 && READ_ONCE(ddr_selfref);
+	u32 old = 0;
+
+	/* the vendor's suspend: self-refresh instead of power-down */
+	if (selfref) {
+		old = readl(pwrctl);
+		writel((old & ~PWRCTL_POWERDOWN_EN) | PWRCTL_SELFREF_EN, pwrctl);
+	}
 	cpu_do_idle();
+	if (selfref)
+		writel(old, pwrctl);
 	return 0;
 }
 
@@ -137,6 +166,7 @@ static const struct platform_suspend_ops sc7730_suspend_ops = {
 
 static void __init sc7730_init_late(void)
 {
+	sc7730_umctl2 = ioremap(UMCTL2_PHYS, 0x100);
 	suspend_set_ops(&sc7730_suspend_ops);
 }
 #else
