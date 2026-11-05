@@ -65,12 +65,14 @@ static const s64 sr200_link_freqs[] = { 96000000, 144000000, 192000000 };
 /*
  * The first mode is the default, which camera applications tend to keep
  * for the preview. The HAL's 800x600 table runs at 8 fps, so it is left
- * out; 640x480 runs at 24 fps.
+ * out; 640x480 runs at 24 fps. So is 1600x1200 (UXGA, ~8 fps): a capture
+ * path that switches modes for stills does not exist yet, and offering it
+ * made the Android camera HAL pair a 640x480 preview with a 1600x1200 JPEG,
+ * two streams the DCAM cannot produce at once.
  */
 static const struct sr200_mode sr200_modes[] = {
 	/* the HAL's 640x480 table is a complete init of its own */
 	{ 640, 480, "sr200pc20m/640x480.bin", false, 1 },
-	{ 1600, 1200, "sr200pc20m/1600x1200.bin", true, 2 },
 };
 
 static const char * const sr200_supplies[] = { "avdd", "dovdd" };
