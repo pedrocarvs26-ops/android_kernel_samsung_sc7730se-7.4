@@ -586,6 +586,7 @@ static int s5k_enum_frame_size(struct v4l2_subdev *sd,
 }
 
 static int s5k_set_fmt(struct v4l2_subdev *sd,
+		       const struct v4l2_subdev_client_info *ci,
 		       struct v4l2_subdev_state *state,
 		       struct v4l2_subdev_format *format)
 {
@@ -604,6 +605,7 @@ static int s5k_set_fmt(struct v4l2_subdev *sd,
 }
 
 static int s5k_get_selection(struct v4l2_subdev *sd,
+			     const struct v4l2_subdev_client_info *ci,
 			     struct v4l2_subdev_state *state,
 			     struct v4l2_subdev_selection *sel)
 {
