@@ -50,7 +50,7 @@ CONFIG_SMP=y
 CONFIG_HZ_250=y
 CONFIG_THUMB2_KERNEL=y
 CONFIG_HIGHMEM=y
-CONFIG_CMDLINE="printk.devkmsg=on printk.time=1 loglevel=4 log_buf_len=4M cma=192M@0x8a000000-0x9e800000 loop.max_part=7 rw vt.global_cursor_default=0 panic=10 firmware_class.path=/vendor/firmware/ brcmfmac.feature_disable=0x2000 androidboot.hardware=gtelwifi androidboot.boot_devices=soc/20600000.mmc androidboot.super_partition=SYSTEM androidboot.selinux=enforcing enforcing=1 androidboot.verifiedbootstate=orange androidboot.init_fatal_reboot_target=recovery"
+CONFIG_CMDLINE="printk.devkmsg=on printk.time=1 loglevel=4 log_buf_len=4M cma=192M@0x8a000000-0x9e800000 loop.max_part=7 rw vt.global_cursor_default=0 panic=10 firmware_class.path=/vendor/firmware/ brcmfmac.feature_disable=0x2000 androidboot.hardware=gtelwifi androidboot.boot_devices=soc/20600000.mmc androidboot.super_partition=SYSTEM androidboot.selinux=permissive androidboot.verifiedbootstate=orange androidboot.init_fatal_reboot_target=recovery"
 CONFIG_CMDLINE_EXTEND=y
 CONFIG_CPU_FREQ=y
 CONFIG_CPU_FREQ_STAT=y
